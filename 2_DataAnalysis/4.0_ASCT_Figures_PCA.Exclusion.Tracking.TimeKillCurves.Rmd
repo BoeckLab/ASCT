@@ -1,0 +1,703 @@
+
+# Aim
+```{r}
+# ==================================================================
+# Summary: Single-Cell Tracking & PCA Exclusion Analysis
+# ==================================================================
+# Aim:
+# This script evaluates the quality of single-cell tracking by analyzing 
+# the number of tracked cells across multiple experiments. It integrates 
+# PCA-excluded datasets using the Mahalanobis Distance (2 Std. Dev.) exclusion 
+# criterion to assess bacterial response under different antibiotic conditions.
+
+# Functionality:
+# - Defines paths, directories, and experimental variables.
+# - Iterates through experimental datasets, extracting tracking data and 
+#   categorizing them into "Fitnorm" and "Top2norm" normalization strategies.
+# - Retrieves PCA-excluded features, integrates them with tracking data, and 
+#   processes statistical metrics.
+# - Computes mean bacterial survival across time points (up to 72 hours).
+# - Generates time-kill curves for different antibiotic treatments and PCA strategies.
+# - Compares Mahalanobis Distance exclusion effects on bacterial clearance.
+# - Produces and exports visualization reports in PDF format.
+
+# Expected Outcomes:
+# - Identification of strong antibiotic effects based on PCA-excluded analyses.
+# - Assessment of tracking quality based on Mahalanobis Distance exclusion.
+# - Time-kill curves depicting bacterial survival over time.
+# - Comparison of PCA exclusion strategies to refine bacterial tracking methodologies.
+
+
+```
+
+
+# Section 1: Defining variables
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+
+#Pop data variables
+data.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+res.dir <- c("ASCT_Experimental_Results/ASCT_4_Figures")
+
+exp.res.dir <- c(paste(genDir,
+                       "/",
+                       "ASCT_Experimental_Results/ASCT_4_Figures",sep=""))
+wdDir <- genDir
+
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+setwd(wdDir)
+
+# list the experiment directories to pull the tracking data
+
+list.of.drugs<- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+                    
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x",
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x"
+                                  )
+
+
+
+# EDIT the time scale axis that should be used 
+plot.xaxis.time.scale <- c(0,12,24,36,48,60,72)
+
+```
+
+# Section 2: Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+
+```
+
+## 2.1 Loop through Experimental Results
+```{r}
+
+Main.Tracking.df <- data.frame()
+
+Main.KF.df <- data.frame()
+#expID <- list.of.drugs[12]
+
+
+for ( expID in list.of.drugs ) {
+  
+  Fitnorm <- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x"
+                                  )
+
+# Top2norm
+Top2norm <- c("ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x")
+  
+# Check if expID matches any element in Fitnorm or Top2norm
+if (expID %in% Fitnorm) {
+  fitting.or.Top2.norm <- "Fitnorm"
+} else if (expID %in% Top2norm) {
+  fitting.or.Top2.norm <- "Top2norm"
+} else {
+  fitting.or.Top2.norm <- "Not found"
+}
+
+  
+
+
+path.subdir <- paste("Experimental-Results",
+                     sep="")
+
+list.of.pop.data.Dir  <- paste(dirname(normalizePath(wdDir)),
+                                    "/",
+                                   expID,
+                               "/",
+                         path.subdir,
+                         "/",
+                         fitting.or.Top2.norm,
+                                    sep ="")
+  
+  # Load KF.intermediary table
+      KFinter.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_KFintermediary_.csv", full.names = TRUE)
+
+
+    KF.intermediary.df <- read.csv(      KFinter.files)
+    
+    
+         KF.intermediary.df <-   KF.intermediary.df %>%
+           filter(Merge.def == "Trkv2_Ila2BaSic")%>%
+           select(ExpFile,
+                  Abx.con,
+                  Well_coordinate,
+                  Multiple.Events)%>%
+           distinct()
+
+         
+         
+rm(  KFinter.files)
+
+# Load Trkv2 Flags
+      Tracking.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_Flags.csv", full.names = TRUE)
+
+  Tracking.df <- read.csv(      Tracking.files )
+  
+    Tracking.df <-   Tracking.df %>%
+      filter(Time.Kill.Definitions == "Trkv2_Ila2BaSic")%>%
+      left_join(         KF.intermediary.df )
+    
+    
+    Main.Tracking.df <- rbind(    Main.Tracking.df,
+                                     Tracking.df )
+    
+         KFraw.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_rawKF.csv", full.names = TRUE)
+
+     
+    KFraw <- read.csv(        KFraw.files )
+    
+    KFraw <-KFraw %>%
+      filter(Killing.Def == "Trkv2_LCF_Ila2BaSic")
+    
+    
+    Main.KF.df <- rbind(    Main.KF.df ,   KFraw )
+    
+    rm(  Tracking.df ,
+            Tracking.files,
+             KF.intermediary.df,
+         KFraw)
+    
+    
+}
+
+```
+
+
+
+```{r}
+# ---
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Killing.Def = gsub("Trkv2_LCF_Ila2BaSic","Trkv2_Ila2BaSic", Killing.Def))
+  
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Time_Hrs = gsub("h","",Sub.KF)) %>%
+  mutate(Time_Hrs = as.numeric(Time_Hrs))%>%
+  mutate(Time.Kill.Definitions = Killing.Def)%>%
+  mutate(Isolate = paste("Iso.", Isolate, sep=""))%>%
+  mutate(LC.fraction.corr = value)%>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+  select(ExpFile,
+         Abx.con,
+         Isolate,
+         ExpFile.Wellcoordinate ,
+         Well_coordinate,
+         Time_Hrs,
+         Time.Kill.Definitions ,
+         LC.fraction.corr)%>%
+  distinct()%>%
+  filter(Time_Hrs == 72) # KEEPING ONLY 72h KF
+  
+  
+
+
+# ---
+Main.Tracking.df <- Main.Tracking.df %>%
+  ungroup()%>%
+  filter(Overall.Assessment == "Keep" & 
+           Multiple.Events == "Keep")
+
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+  select(-Overall.Assessment,
+         -Multiple.Events,
+         -Flag.label)
+
+
+Main.Tracking.df <- Main.Tracking.df %>%
+mutate(timestep = as.numeric(timestep))
+
+
+list.of.Well.coordinates.Kept.in.analysis <- unique(Main.Tracking.df$ExpFile.Wellcoordinate)
+
+Main.KF.df <- Main.KF.df %>%
+  filter(ExpFile.Wellcoordinate %in% list.of.Well.coordinates.Kept.in.analysis)
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(timestep = as.numeric(31))
+
+# Assume your y-axis linear scale values range from 1 to 100%
+
+linear_breaks <- c( 40,50,60 ,70,80,90, 100) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+Main.KF.df  <- Main.KF.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+
+```
+
+# Merging Killing Features and Main tracking Data 
+```{r}
+
+Main.Tracking.df <- rbind(Main.Tracking.df,
+                          Main.KF.df)
+
+
+```
+
+
+
+# Loading PCA strategies ----
+```{r}
+
+PCA.df.dir <- paste(exp.res.dir,
+                    "/PCA-analysis",
+                    sep="")
+
+# List all CSV files in the directory with the specified pattern
+csv_files <- list.files(PCA.df.dir , pattern = ".csv", full.names = TRUE)
+
+# Extract filenames without extension
+file_ids <- tools::file_path_sans_ext(basename(csv_files))
+
+
+# Load all CSV files into a list of data frames
+list_of_dfs <- lapply(csv_files, function(file) {
+  df <- read.csv(file)
+  df$filename <- tools::file_path_sans_ext(basename(file))
+  return(df)
+})
+
+
+# Alternatively, if you want to combine them into a single data frame
+PCA.df <- do.call(rbind, list_of_dfs)
+
+#Houskeeping
+rm(csv_files,
+   list_of_dfs)
+
+
+
+PCA.df <- separate(PCA.df , col = filename ,
+                   into = c("ExpID",
+                            "Abx.con",
+                            "NormStr",
+                            "GrowthThreshold",
+                            "PCA.Strategy"),
+                   sep="_")
+
+PCA.df <- PCA.df %>%
+  mutate(PCA.Strategy = gsub(".csv", "", PCA.Strategy))
+
+PCA.df <- separate(PCA.df , col = Time.Kill.def ,
+                   into = c("Analysis.def1",
+                            "Analysis.def2"),
+                   sep="_")
+  
+PCA.df <- PCA.df %>%
+  mutate(Time.Kill.Definitions = paste(Analysis.def2,
+                                        Analysis.def1,
+                                        sep="_"))%>%
+  select(-Analysis.def1,
+         -Analysis.def2)
+
+
+PCA.df <- PCA.df %>%
+  select(-PC1,
+         -PC2,
+         -var.pc1,
+         -var.pc2,
+         -Mahalanobis.distance)
+
+PCA.df <- PCA.df %>%
+  filter(Time.Kill.Definitions == "Trkv2_Ila2BaSic")
+
+
+PCA.df <- PCA.df %>%
+mutate(Mahalanobis.Excl.res  = paste(MD.2sd,
+                                     MD.3sd,
+                                     sep="_") )%>%
+  select(ExpID,
+         Time.Kill.Definitions,
+         Abx.con,
+         Isolate,
+         NormStr,
+         GrowthThreshold,
+         PCA.Strategy,
+       Mahalanobis.Excl.res)
+
+PCA.df <- PCA.df %>%
+mutate(Mahalanobis.Excl.res = if_else(Mahalanobis.Excl.res == "_", "", Mahalanobis.Excl.res))
+
+
+PCA.df <- PCA.df %>%
+mutate(Mahalanobis.Excl.res = if_else(Mahalanobis.Excl.res == "MD.2sd_", "MD.2sd", Mahalanobis.Excl.res))%>%
+mutate(Mahalanobis.Excl.res = if_else(Mahalanobis.Excl.res == "MD.2sd_MD.3sd", "MD.3sd", Mahalanobis.Excl.res))
+
+PCA.df <- PCA.df %>%
+mutate(Abx.con = gsub("\\.", "_", Abx.con))
+
+
+ MEAN.Main.Tracking.df<- Main.Tracking.df %>%
+  ungroup()%>%
+   ungroup()%>%
+  group_by(ExpFile,
+           Abx.con,
+           Isolate,
+           timestep)%>%
+  mutate(Mean.LC.fraction.corr = mean(LC.fraction.corr),
+         Mean.Time_Hrs = mean(Time_Hrs))%>%
+  ungroup()%>%
+  filter(Time_Hrs <= 72)%>%
+
+  select(ExpID,
+         Time.Kill.Definitions,
+         Abx.con,
+         Isolate,   
+         Mean.Time_Hrs,
+         Mean.LC.fraction.corr)%>%
+  distinct()
+
+  MEAN.Main.Tracking.PCA.df <- data.frame()
+# Loop though each exp ID and Growth threshold def and add the information of Mahalanobis + PCA strategy
+  
+  list.of.ExpID <- unique(PCA.df$ExpID)
+  list.of.Growth.Thres <- unique(PCA.df$GrowthThreshold)
+  list.of.PCAstrategies <- unique(PCA.df$PCA.Strategy)
+
+for ( expID in list.of.ExpID ) {
+  
+  MEAN.Main.Tracking.df.sub <- MEAN.Main.Tracking.df %>%
+    filter(ExpID == expID)
+  
+  for( growth.Thrs in   list.of.Growth.Thres) {
+    
+    for ( pca.strategy in   list.of.PCAstrategies){
+      
+      PCA.sub.df <- PCA.df %>%
+      filter(ExpID == expID & GrowthThreshold == growth.Thrs & PCA.Strategy == pca.strategy)
+    
+    
+      MEAN.Main.Tracking.df.sub.sub <- left_join(  MEAN.Main.Tracking.df.sub,
+                                                      PCA.sub.df  )
+      
+            MEAN.Main.Tracking.df.sub.sub <-      MEAN.Main.Tracking.df.sub.sub %>%
+              drop_na()
+    
+            
+              MEAN.Main.Tracking.PCA.df <- rbind(  MEAN.Main.Tracking.PCA.df,
+                                                       MEAN.Main.Tracking.df.sub.sub )
+              
+              
+      
+    }
+    
+  }
+  
+  
+}
+  
+    
+rm(PCA.sub.df,
+   MEAN.Main.Tracking.df.sub,
+   expID,
+   growth.Thrs,
+   pca.strategy,
+               MEAN.Main.Tracking.df.sub.sub )
+
+print(unique(MEAN.Main.Tracking.PCA.df$GrowthThreshold))
+
+print(unique(MEAN.Main.Tracking.PCA.df$PCA.Strategy))
+
+
+MEAN.Main.Tracking.PCA.df <- MEAN.Main.Tracking.PCA.df %>%
+  ungroup()%>%
+  distinct()
+
+```
+
+
+
+```{r}
+
+  All.high.killing.drugs <- MEAN.Main.Tracking.PCA.df %>%
+  select(Abx.con)%>%
+  distinct()%>%
+  mutate(drug = gsub("_(\\d+x)", "", Abx.con),
+         numerical_order = as.numeric(gsub("[^0-9]", "", Abx.con))) %>%
+  arrange(drug, numerical_order)
+  
+  
+    
+  All.high.killing.drugs <- All.high.killing.drugs$Abx.con
+  All.high.killing.drugs.PLOTname <-All.high.killing.drugs
+  All.high.killing.drugs.PLOTname <- gsub("_",".", All.high.killing.drugs.PLOTname)
+  All.high.killing.drugs.PLOTname  <- paste(    All.high.killing.drugs.PLOTname, collapse = "_")
+  All.high.killing.drugs.PLOTname <-""
+
+  plot.filename <- paste(exp.res.dir,"/ASCT_part4_PCA-TimeKillCurves-TRK",All.high.killing.drugs.PLOTname,
+
+          ".pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+
+
+#--- Y axsis ticks
+linear_breaks <- c( 0.40,0.50,0.60 ,0.70,0.80,0.90, 1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <-  c( 40,50,60 ,70,80,90, 100)
+
+library(ggrepel)
+gg <- MEAN.Main.Tracking.PCA.df %>%
+  filter(GrowthThreshold == "GTManual.HR.R.growth")%>%
+  mutate(Mahalanobis.Excl.res = as.factor(Mahalanobis.Excl.res))%>%
+  filter(Mean.Time_Hrs <= 72)%>%
+  ungroup()%>%
+  drop_na()%>%
+  mutate(ExpID.Well.Growth.PCAst = paste(ExpID,
+                                         Isolate,
+                                         GrowthThreshold,
+                                         PCA.Strategy,
+                                         sep="::"))%>%
+  ggplot(aes(x = Mean.Time_Hrs,
+             y = log10(Mean.LC.fraction.corr),
+             group = Isolate,
+             label = Isolate,
+             colour = Mahalanobis.Excl.res,
+             fill = Mahalanobis.Excl.res))+
+  geom_line( 
+             alpha = 0.25,
+             size = 0.2,
+             stroke = 0,
+             )+
+   
+  theme_prism()+
+
+   scale_y_continuous(
+
+                    breaks = c(0, -0.999,  -1.999),
+                    limits = c(-3,0),
+                     labels = c(100, 10, 1))+
+    geom_text(data = .  %>% filter(GrowthThreshold == "GTManual.HR.R.growth")%>% group_by(ExpID.Well.Growth.PCAst) %>% top_n(n = 1, wt = Mean.Time_Hrs),
+      aes(label = Isolate), size = 0.2,
+      stroke = 0,
+      alpha = 0.10)+
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title = paste("Time kill cuvres"),
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Condition evaluation",
+       caption = "PCAstr: \n allLCF ; all live cell fractions\n
+       subLCF; 6,12, 24, 48, 60,72\n 
+       AUCs; 0.24h, 24.48h, 48.72h",
+       subtitle = "All curves passed tracking quality control")+
+    geom_text(x=48, y=1,
+            size = 1)+ # Plot label
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+  
+    scale_colour_manual(values = c("black","red","blue"))+
+
+
+  facet_wrap_paginate( Abx.con + ExpID + PCA.Strategy ~Time.Kill.Definitions,
+                      ncol =4,
+                      nrow =2,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(plot.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(Abx.con + ExpID + PCA.Strategy ~Time.Kill.Definitions,
+                      ncol =4,
+                      nrow =2, page = i))
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   plot.filename,
+   g)
+  
+
+```
+
+```{r}
+
+  All.high.killing.drugs <- MEAN.Main.Tracking.PCA.df %>%
+  select(Abx.con)%>%
+  distinct()%>%
+  mutate(drug = gsub("_(\\d+x)", "", Abx.con),
+         numerical_order = as.numeric(gsub("[^0-9]", "", Abx.con))) %>%
+  arrange(drug, numerical_order)
+  
+  
+    
+  All.high.killing.drugs <- All.high.killing.drugs$Abx.con
+  
+        All.high.killing.drugs.PLOTname <-All.high.killing.drugs
+    
+    All.high.killing.drugs.PLOTname <- gsub("_",".", All.high.killing.drugs.PLOTname)
+    All.high.killing.drugs.PLOTname  <- paste(    All.high.killing.drugs.PLOTname, collapse = "_")
+    
+          All.high.killing.drugs.PLOTname <-""
+
+  plot.filename <- paste(exp.res.dir,"/ASCT_part4_TimeKillCurves-TRK-LB.talk",All.high.killing.drugs.PLOTname,
+
+          ".pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+
+
+#--- Y axsis ticks
+
+linear_breaks <- c( 0.40,0.50,0.60 ,0.70,0.80,0.90, 1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <-  c( 40,50,60 ,70,80,90, 100)
+#--- 
+
+#LC_plottitle <- paste ( "Time kill curves")
+library(ggrepel)
+gg <- MEAN.Main.Tracking.PCA.df %>%
+  filter(GrowthThreshold == "GTManual.HR.R.growth")%>%
+  filter(Mahalanobis.Excl.res == "")%>%
+  filter(Abx.con != "BDQ_20x")%>%
+  mutate(Mahalanobis.Excl.res = as.factor(Mahalanobis.Excl.res))%>%
+  filter(Mean.Time_Hrs <= 72)%>%
+  ungroup()%>%
+  drop_na()%>%
+  mutate(ExpID.Well.Growth.PCAst = paste(ExpID,
+                                         Isolate,
+                                         GrowthThreshold,
+                                         PCA.Strategy,
+                                         sep="::"))%>%
+  ggplot(aes(x = Mean.Time_Hrs,
+             y = log10(Mean.LC.fraction.corr),
+             group = Isolate,
+             colour = Mahalanobis.Excl.res,
+             fill = Mahalanobis.Excl.res))+
+  geom_line( 
+             alpha = 0.25,
+             size = 0.2,
+             stroke = 0,
+             )+
+
+  theme_prism()+
+   scale_y_continuous(
+
+                    breaks = c(0, -0.999,  -1.999),
+                    limits = c(-3,0),
+                     labels = c(100, 10, 1))+
+
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title = paste("Time kill cuvres"),
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]")+
+   
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+  
+    scale_colour_manual(values = c("black","red","blue"))+
+
+
+  facet_wrap_paginate( Abx.con + ExpID + PCA.Strategy ~Time.Kill.Definitions,
+                      ncol =2,
+                      nrow =2,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(plot.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(Abx.con + ExpID + PCA.Strategy ~Time.Kill.Definitions,
+                      ncol =2,
+                      nrow =2, page = i))
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   plot.filename,
+   g)
+  
+```
+
+

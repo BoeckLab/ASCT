@@ -1,0 +1,567 @@
+
+# Aim
+```{r}
+# ==================================================================
+# Script for Comparative Statistical Analysis of PCA-Excluded Killing Features
+# ==================================================================
+# This R script performs a comparative statistical analysis of PCA-excluded 
+# killing features to evaluate their association with clinical outcomes 
+# (infection clearance vs. persistence) and lung function (FEV1).
+#
+# Aim:
+# - Compare different statistical parameters generated from PCA-excluded datasets.
+# - Assess the impact of normalization strategies and exclusion criteria.
+# - Identify the strongest predictors of clinical outcomes and lung function.
+# - Determine the most effective statistical test for association detection.
+#
+# Functionality:
+# - **Data Processing:**
+#   - Loads statistical results from PCA-excluded killing feature datasets.
+#   - Extracts key metadata (drug concentrations, growth thresholds, PCA strategies).
+#   - Filters and standardizes sample sizes for consistent comparisons.
+#
+# - **Statistical Analysis:**
+#   - **Non-Parametric Tests:**
+#     - Wilcoxon test (Mann-Whitney U test) for median comparisons.
+#     - Standard t-test (equal variance assumption).
+#     - Welch t-test (adjusted for unequal variance).
+#   - **Parametric Tests:**
+#     - Pearson correlation (linear associations).
+#     - Spearman correlation (rank-based associations).
+#     - Linear regression (predictive modeling).
+#
+# - **Visualization & Reporting:**
+#   - Generates bar plots of statistical test results.
+#   - Highlights significant p-values (p < 0.05) with a red threshold line.
+#   - Compares different statistical methods across PCA exclusion and normalization strategies.
+#   - Outputs structured CSV reports and PDF visualizations.
+#
+# Expected Outcomes:
+# - Identification of statistically significant killing features influencing infection clearance and lung function.
+# - Determination of the most robust statistical method under different exclusion criteria.
+# - Insights into how PCA exclusion strategies affect statistical significance.
+#
+# This script facilitates robust feature selection and optimization in high-throughput bacterial killing data 
+# and improves statistical modeling in infectious disease research.
+#
+# Usage Instructions:
+# - Ensure statistical result files are available in the specified directories.
+# - Modify filtering parameters and experimental conditions as required.
+# - Execute the script to analyze, visualize, and compare statistical outcomes.
+# ==================================================================
+
+
+```
+
+
+
+
+#Section 1: Defining paths and directories 
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+
+# loading data from the PCA excluded outlier analysis
+data.dir <- c("ASCT_Experimental_Results/ASCT_3_statistical_tests")
+res.dir <- c("ASCT_Experimental_Results/ASCT_3.1_simple_stats")
+
+
+
+wdDir <- genDir
+
+data.dir <- paste(genDir,"/",data.dir ,sep="")
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+
+
+setwd(wdDir)
+
+
+# --- label directory file information to be used in Section 4  clinical isolates list
+# Navigate back one directory (assuming you want to go up one level)
+clinical.dir <- file.path(genDir, "..")
+
+# Enter the ASCT.Ranalysis_Exp_Info directory
+clinical.dir <- file.path(clinical.dir , "ASCT.Ranalysis_Exp_Info")
+# Enter the ASCT_CC directory
+clinical.dir <- file.path(clinical.dir , "ASCT_Clinical_Metadata")
+
+clinical.metadata.file <- c("ASCT_3_Clinical_Metadata_forAlex.csv")
+
+
+```
+
+# Section 2: Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(stringr)
+library(ggprism)
+
+```
+
+
+# Section 3: 
+
+## 3.1 Identify list of simplified stats directories
+```{r}
+# Set the path to the directory you want to search in
+directory_path <- data.dir
+
+# Use list.files to list directories containing "Simplified_Stats"
+matching_directories <- list.dirs(directory_path)
+matching_directories <- list.dirs(directory_path, recursive = TRUE,  full.names = TRUE)
+matching_directories  <-matching_directories [grep("_Simplified_Stats", matching_directories )]
+matching_directories  <-matching_directories [grep("_Simplified_Stats", matching_directories )]
+matching_directories <- matching_directories[!grepl("OldResults", matching_directories)]
+matching_directories <- matching_directories[!grepl("20231207", matching_directories)]
+matching_directories <- matching_directories[!grepl("20240116", matching_directories)]
+matching_directories <- matching_directories[!grepl("20240211", matching_directories)]
+matching_directories <- matching_directories[!grepl("20240212", matching_directories)]
+matching_directories <- matching_directories[!grepl("20240314", matching_directories)]
+matching_directories <- matching_directories[!grepl("Oldres", matching_directories)]
+matching_directories <- matching_directories[!grepl("20240218-oldMXF", matching_directories)]
+matching_directories <- matching_directories[!grepl("MXF-oldResults-standard.pc", matching_directories)]
+
+
+list.of.directories <- matching_directories
+
+rm(matching_directories,
+  directory_path)
+```
+
+## 3.2 Pooling simplified stats
+```{r}
+
+Master.df <- data.frame()
+#specific.dir <- list.of.directories[1]
+for ( specific.dir in list.of.directories ) {
+  
+  #Creacting vector with the list of file names
+perWell.filenames <- list.files(path = specific.dir ,
+                            pattern = "*.csv",
+                            full.names = FALSE)
+
+#setting path to where all the csv files due to be processed are
+setwd(specific.dir)
+
+
+OC.file.list <- lapply(perWell.filenames,
+                      read.csv)
+
+
+
+#Naming the elements of my list with the vector list of my file names
+Exp.Names <- gsub(".csv",
+                  "",
+                  perWell.filenames)
+
+names(OC.file.list)<- Exp.Names
+
+#Irrespective of the number of rows bind all the elemtents of my list using a unique identifier "well_coord" which is based on the name of each element of the list 
+perWell.df <- rapply(
+  OC.file.list,
+  as.character,
+  how = "replace"
+)
+
+
+perWell.df <- bind_rows(perWell.df , .id = "Filename")
+Master.df <- rbind(Master.df ,
+                   perWell.df )
+
+#Houskeeping
+rm(OC.file.list)
+  
+}
+
+
+rm(perWell.df)
+```
+
+
+### 3.2.1 Data wrangling sample size
+```{r}
+
+Master.df <- Master.df %>%
+  mutate(Filename = gsub("_Simplified.Stats","",Filename))%>%
+  select(-Abx.con)
+
+Master.df <- separate(Master.df , col = Filename,
+                      into = c("ExpID",
+                               "Drug.concentration",
+                               "Norm.Strategy",
+                               "Growth.Threshold",
+                               "PCA.mahalanobis.exl",
+                                "PCA.Strategy"
+                               ),
+                      sep ="_")
+
+Master.df <-Master.df %>%
+  filter(Growth.Threshold ==  "GTManual.HR.R.growth" | Growth.Threshold == "GTManual.R.growth" | Growth.Threshold =="GTManual.HR.Rr.growth")
+
+
+
+Master.df <-Master.df %>%
+  mutate(Growth.Threshold  = gsub("GTHR.Rr.growth","HR.Rr-excl",Growth.Threshold))%>%
+  mutate(Growth.Threshold  = gsub("GTHR.R.growth","HR.R-excl",Growth.Threshold))%>%
+  mutate(Growth.Threshold  = gsub("GTR.growth","R-excl",Growth.Threshold))
+
+
+Master.df.sampleSize  <- Master.df %>%
+  select(ExpID,
+         Drug.concentration,
+         Norm.Strategy,
+         Growth.Threshold,
+         PCA.mahalanobis.exl,
+         PCA.Strategy,
+         Outcome,
+         contains("_Sample.Size"))
+
+
+Master.df.sampleSize <- melt(Master.df.sampleSize , id.vars =   c("ExpID",
+                                                            "Drug.concentration",
+                                                            "Norm.Strategy",
+                                                            "Growth.Threshold",
+                                                            "PCA.mahalanobis.exl",
+                                                            "PCA.Strategy",
+                                                            "Outcome"),
+                             variable.name = "Sample.Size.Exclude", 
+                             value.name = "Sample.Size")
+
+
+Master.df.sampleSize <- separate(Master.df.sampleSize , col = Sample.Size.Exclude,
+                      into = c("Analysis.Str1",
+                               "Analysis.Str2",
+                               "Sample.Size.txt",
+                               "Killing.Feature.1",
+                               "Killing.Feature.2"),
+                      sep ="_")
+
+Master.df.sampleSize <-Master.df.sampleSize %>%
+  distinct()
+
+```
+
+
+
+
+## 3.3 Data wrangling
+```{r}
+
+Master.df <- Master.df %>%
+  select(-contains("_Sample.Size"))
+
+
+
+Master.df <- melt(Master.df, id.vars = c("ExpID",
+                               "Drug.concentration",
+                               "Norm.Strategy",
+                               "Growth.Threshold",
+                               "PCA.mahalanobis.exl",
+                               "PCA.Strategy",
+                               "Outcome"), variable.name = "Feature.Def", value.name = "values")
+
+
+Master.df <- separate(Master.df , col = Feature.Def,
+                      into = c("Analysis.Str1",
+                               "Analysis.Str2",
+                               "Statistical.Test",
+                               "Killing.Feature.1",
+                               "Killing.Feature.2"),
+                      sep ="_")
+
+
+```
+
+
+```{r}
+Master.df <- Master.df %>%
+  mutate(Analysis.Str = paste(Analysis.Str1,
+                              Analysis.Str2,
+                              sep="_"),
+         Killing.Feature = paste(Killing.Feature.1,
+                                 Killing.Feature.2,
+                                 sep="_"))%>%
+  select(-Analysis.Str1,
+         -Analysis.Str2,
+         -Killing.Feature.1,
+         -Killing.Feature.2)
+
+
+Master.df.sampleSize <- Master.df.sampleSize %>%
+  mutate(Analysis.Str = paste(Analysis.Str1,
+                              Analysis.Str2,
+                              sep="_"),
+         Killing.Feature = paste(Killing.Feature.1,
+                                 Killing.Feature.2,
+                                 sep="_"))%>%
+  select(-Analysis.Str1,
+         -Analysis.Str2,
+         -Killing.Feature.1,
+         -Killing.Feature.2,
+         -Sample.Size.txt)
+
+Master.df<- Master.df %>%
+  left_join(Master.df.sampleSize, 
+            by =c("ExpID",
+                  "Drug.concentration",
+                  "Norm.Strategy",
+                  "Growth.Threshold",
+                           "PCA.mahalanobis.exl",
+                  "PCA.Strategy",
+                  "Outcome",
+                "Analysis.Str",
+                "Killing.Feature"))
+
+```
+
+
+# Section 4: Comparing Features
+```{r}
+Master.df <- Master.df %>%
+  mutate(Abx.con = Drug.concentration)%>%
+  select(ExpID,
+         Abx.con,
+         Norm.Strategy,
+         Growth.Threshold,
+         PCA.mahalanobis.exl,
+         PCA.Strategy,
+         Statistical.Test,
+         Outcome,
+         Analysis.Str,
+         Killing.Feature,
+         Sample.Size,
+         values)%>%
+  mutate(Sample.Size = as.numeric(Sample.Size),
+         values = as.numeric(values))
+  
+  Master.df <- Master.df %>%
+  mutate(X.variable.plot = paste(
+                                Growth.Threshold,
+                                    PCA.mahalanobis.exl,sep="_"))
+```
+
+
+```{r}
+desired.order.X.axis <- c("GTManual.R.growth_MD.0sd",
+                          "GTManual.HR.R.growth_MD.0sd",
+                          "GTManual.HR.Rr.growth_MD.0sd",
+                          "GTManual.R.growth_MD.3sd",
+                          "GTManual.HR.R.growth_MD.3sd",
+                          "GTManual.HR.Rr.growth_MD.3sd",
+                          "GTManual.R.growth_MD.2sd",
+                          "GTManual.HR.R.growth_MD.2sd" ,
+                          "GTManual.HR.Rr.growth_MD.2sd")
+```
+
+# Plotting associations Clinical outcome
+```{r}
+
+Master.df.sampleSize.subset <- Master.df.sampleSize %>%
+  select(
+    Growth.Threshold, # added 20240321
+    ExpID,
+         Norm.Strategy,
+         PCA.mahalanobis.exl,
+         PCA.Strategy,
+         Analysis.Str,
+         Killing.Feature,
+         Outcome,
+         Sample.Size)%>%
+   mutate(Killing.Feature = gsub("AUCrt_","AUC_", Killing.Feature),
+         Killing.Feature = gsub("AUCrtLOG_","AOC_", Killing.Feature))%>%
+  distinct()
+
+Plot.filename<- paste(res.dir,"/","Comparing_Stats_features_ALLDATA-prism-ClinicalOutcome_", format(Sys.time(), "%Y%m%d"),
+                      ".pdf", sep = "")
+
+
+gg <- Master.df %>%  
+  ungroup()%>%
+  filter(PCA.Strategy == "PCAstr.allLCF")%>%
+  
+  # Filter out the different PCA strategies we decided to not exclude 
+  filter(Analysis.Str == "Trkv2_Ila2BaSic" |Analysis.Str =="P.Ila_scvsBaSic")%>%
+   filter(!grepl("-ExclResIso", PCA.Strategy))%>%
+  mutate(Killing.Feature = gsub("AUCrt_","AUC_", Killing.Feature),
+         Killing.Feature = gsub("AUCrtLOG_","AOC_", Killing.Feature))%>%
+  filter(Statistical.Test != "LinearReg.Rsqrval.Test")%>%
+  filter(Statistical.Test == "MannWhitneyU.Test" | Statistical.Test == "Welch.Test"  | Statistical.Test == "T.Test")%>%
+  filter(Outcome == "ClearedVSpersistant_ATS")%>%
+mutate(X.variable.plot = factor(X.variable.plot, levels = desired.order.X.axis ))%>%
+  mutate(X.variable.plot = gsub("GTManual","GTman", X.variable.plot))%>%
+    mutate(X.variable.plot = gsub(".growth","", X.variable.plot))%>%
+  select(-Sample.Size)%>%
+    distinct()%>%
+  left_join(Master.df.sampleSize.subset, by = c("ExpID",
+                                                "Norm.Strategy",
+                                                "Growth.Threshold",
+                                                "PCA.mahalanobis.exl" ,
+                                                "PCA.Strategy",
+                                                "Analysis.Str",
+                                                "Killing.Feature",
+                                                "Outcome"))%>%
+  ungroup()%>%
+  distinct()%>%
+filter(PCA.mahalanobis.exl == "MD.0sd" | PCA.mahalanobis.exl == "MD.3sd")%>%
+
+ggplot( aes(x = X.variable.plot, 
+            y = log10(values),
+            fill = Statistical.Test,
+          )) +
+ geom_hline(yintercept = -1.30103, linetype = "solid", color = "red", alpha = 0.5) +  # Add the horizontal line
+  geom_text(x = Inf, y = -1.30103, label = "0.05", hjust = -0.2, vjust = 0.5, color = "red") +  # Add the label
+  geom_bar(stat = "identity", alpha = 0.75,
+          # width =0.6,
+           
+           position="dodge") +
+ geom_text(aes(label = Sample.Size,
+               fill = Statistical.Test),
+             colour = "Black",
+             vjust = 0.75,
+              size = 0.6,
+           position = position_dodge(width = 0.9)) +
+  labs(title = 
+                     "Comparing association with clinical outcome ",
+           subtitle = "Red line shows p = 0.05",
+              caption = "Abbreviations: R bottom right quadrant of growth scatterplot , minor r bottom left quadrant, HR  top left quadrant , Growth Threshold (GT), algorithm (AI), PCA Mahalanobis Distance (MD), Standard deviation (sd) and Area Under curve (AUC)",
+                     
+       x = "Feature",
+       y = "p-value [a.u]") +
+    theme_prism()+
+ 
+
+     theme(aspect.ratio = 1)+
+
+  scale_y_continuous(breaks = c(0, -1.00000,-2,-3.00000,-4.00000, -5.00000),
+                    limits = c(-7,0),
+                     labels = c(1, 0.1, 0.01,0.001,"0.0001","0.00001"))+
+  theme(
+    axis.text.x = element_text(size = 2, angle = 45),
+        legend.position = "top",
+    plot.caption = element_text(hjust = 0,  size = 2) )+ # Remove X-axis labels
+
+  scale_fill_grey()+
+  facet_wrap_paginate(Abx.con + Analysis.Str   ~Killing.Feature,
+                      ncol =4,
+                      nrow =3,
+                      page =1)
+
+
+n <- n_pages(gg)
+
+pdf(Plot.filename,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(Abx.con + Analysis.Str  ~Killing.Feature,
+                      ncol =4,
+                      nrow =3, page = i)) 
+}
+dev.off()
+
+```
+## Lung function
+```{r}
+
+
+Plot.filename<- paste(res.dir,"/","Comparing_Stats_features_ALLDATA-prism-LungFunction_", format(Sys.time(), "%Y%m%d"),
+                      ".pdf", sep = "")
+
+
+gg<- Master.df %>%  
+  
+    filter(PCA.Strategy == "PCAstr.allLCF")%>%
+  # Filter out the different PCA strategies we decided to not exclude 
+  filter(Analysis.Str == "Trkv2_Ila2BaSic" |Analysis.Str =="P.Ila_scvsBaSic")%>%
+   filter(!grepl("-ExclResIso", PCA.Strategy))%>%
+  mutate(Killing.Feature = gsub("AUCrt_","AUC_", Killing.Feature),
+         Killing.Feature = gsub("AUCrtLOG_","AOC_", Killing.Feature))%>%
+     filter(!grepl("-ExclResIso", PCA.Strategy))%>%
+  filter(Statistical.Test == "PearsonsCorrPval.Test" | Statistical.Test == "SpearmansRankCorrPval.Test" )%>%
+  filter(Outcome == "FEV1_clearPers")%>%
+  
+
+mutate(X.variable.plot = factor(X.variable.plot, levels = desired.order.X.axis ))%>%
+
+  mutate(X.variable.plot = gsub("GTManual","GTman", X.variable.plot))%>%
+    mutate(X.variable.plot = gsub(".growth","", X.variable.plot))%>%
+  
+   select(-Sample.Size)%>%
+    distinct()%>%
+  left_join(Master.df.sampleSize.subset, by = c("ExpID",
+                                                "Norm.Strategy",
+                                                "PCA.mahalanobis.exl" ,
+                                                "Growth.Threshold",
+                                                "PCA.Strategy",
+                                                "Analysis.Str",
+                                                "Killing.Feature",
+                                                "Outcome"))%>%
+  
+  filter(PCA.mahalanobis.exl == "MD.0sd" | PCA.mahalanobis.exl == "MD.3sd")%>%
+
+ggplot( aes(x = X.variable.plot, 
+            y = log10(values), #colour = Isolate.order,
+            fill = Statistical.Test)) +
+ geom_hline(yintercept = -1.30103, linetype = "solid", color = "red", alpha = 0.5) +  # Add the horizontal line
+ geom_bar(stat = "identity", alpha = 0.75,
+           position="dodge") +
+ geom_text(aes(label = Sample.Size,
+               fill = Statistical.Test),
+             colour = "Black",
+             vjust = 0.75,
+              size = 0.6,
+           position = position_dodge(width = 0.9)) +
+
+  labs(title = 
+                     "Comparing association with lung function ",
+           subtitle = "Red line shows p = 0.05",
+              caption = "Abbreviations: R bottom right quadrant of growth scatterplot , minor r bottom left quadrant, HR  top left quadrant , Growth Threshold (GT), algorithm (AI), PCA Mahalanobis Distance (MD), Standard deviation (sd) and Area Under curve (AUC)",
+                     
+       x = "Feature",
+       y = "p-value [a.u]") +
+    theme_prism()+
+ 
+
+     theme(aspect.ratio = 1)+
+
+  scale_y_continuous(breaks = c(0, -1.00000,-2,-3.00000,-4.00000, -5.00000),
+                    limits = c(-7,0),
+                     labels = c(1, 0.1, 0.01,0.001,"0.0001","0.00001"))+
+  
+ 
+ theme(
+    axis.text.x = element_text(size = 2, angle = 45),
+        legend.position = "top",
+    plot.caption = element_text(hjust = 0,  size = 2) )+ # Remove X-axis labels
+scale_fill_grey()+
+  facet_wrap_paginate(Abx.con + Analysis.Str + PCA.Strategy  ~Killing.Feature + Norm.Strategy,
+                      ncol =4,
+                      nrow =3,
+                      page =1)
+
+
+n <- n_pages(gg)
+
+pdf(Plot.filename,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(Abx.con + Analysis.Str + PCA.Strategy ~Killing.Feature + Norm.Strategy ,
+                      ncol =4,
+                      nrow =3, page = i)) 
+}
+dev.off()
+```
+
+
+

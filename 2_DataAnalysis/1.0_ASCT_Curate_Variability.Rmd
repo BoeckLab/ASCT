@@ -1,0 +1,291 @@
+
+# Aim: 
+```{r}
+# ==================================================================
+# Script for Curating Killing Features Data Across ASCT Experiments
+# ==================================================================
+# This R script automates the processing and curation of killing 
+# features data across multiple ASCT experiments. It performs data 
+# integration, filtering, and normalization for downstream analysis.
+#
+# Functionality:
+# - Defines paths and experiment-specific parameters.
+# - Iterates over a list of ASCT experiments and retrieves 
+#   killing features data.
+# - Merges and processes the data based on predefined normalization 
+#   methods (e.g., Top2norm or Fitnorm).
+# - Filters out killing features with insufficient data coverage or variability
+# - Reformats column names for consistency.
+# - Exports curated datasets for variability analysis.
+#
+# Usage:
+# - Modify `list.of.experiments.for.loop` to specify ASCT experiments.
+# - Choose the type of normalization (`type.of.normalisation.analysis`).
+# - Ensure the required CSV files are present in the specified directories.
+#
+# This script is essential for curating high-throughput image analysis
+# data, ensuring standardized data processing and facilitating 
+# downstream statistical analyses.
+```
+
+
+#1. Defining paths and variables
+```{r setup, include=FALSE}
+
+# Working directory
+genDir <- getwd() 
+setwd(genDir)
+
+start <- Sys.time()
+results.dir <- paste(genDir,
+                     "/",
+                     "ASCT_Experimental_Results/",
+                     sep="")
+# ASCT experiments you wish to curate
+
+
+
+#ASCT experiments you wish to curate
+#Fitting norm
+# list.of.experiments.for.loop <- c("ASCT.04_MXF20x",
+#                                   "ASCT.07_TGC20x",
+#                                    "ASCT.08_AMK20x",
+#                                   "ASCT.09_LZD20x",
+#                                   "ASCT.12_BDQ20x",
+#                                   "ASCT.13_AMK10x",
+#                                   "ASCT.14_MIN20x",
+# 
+#                                   "ASCT.15_CLO20x",
+#                                   "ASCT.16_TGC10x",
+#                                   "ASCT.18_AZM10x",
+#                                   "ASCT.19_LZD10x",
+#                                   "ASCT.20_MIN10x",
+#                                   "ASCT.21_CLO10x",
+#                                   "ASCT.22_AZM20x",
+#                                   "ASCT.24_MXF10x"
+#                                   )
+
+# list.of.experiments.for.loop <- c(
+#  
+#                                   "ASCT.22_AZM20x"
+#                                   )
+
+# Top2norm
+list.of.experiments.for.loop <- c("ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x")
+
+
+# Run one at a time
+
+type.of.normalisation.analysis <- c("Top2norm")
+#type.of.normalisation.analysis <- c("Fitnorm")
+
+
+# label directory file information to be used in Section 4  clinical isolates list
+# Navigate back one directory (assuming you want to go up one level)
+label_dir <- file.path(genDir, "..")
+
+# Enter the ASCT.Ranalysis_Exp_Info directory
+label_dir <- file.path(label_dir , "ASCT.Ranalysis_Exp_Info")
+
+# Enter the ASCT_CC directory
+label_dir <- file.path(label_dir , "ASCT_Label_directory")
+
+clinical.iso.list.file <- c("ASCT_1_Clinical.iso_list.csv")
+
+
+```
+
+#2. Loading libraries
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(reshape2)
+library(scales)
+
+```
+
+
+#3. Killing Features variability assessment
+```{r}
+
+#id <- list.of.experiments.for.loop[1]
+## Loop through each exp.ID
+for (id in list.of.experiments.for.loop ) {
+  
+
+  # Create the path to your desired directory for the current exp.ID
+  path <- file.path("..",id, "Experimental-Results", type.of.normalisation.analysis)
+  
+  # List all files in the directory
+  files <- list.files(path)
+  
+  # Filter files that contain "Clinical.Isolates" and "Killing.Features" in their names
+  matching_files <- files[grep("KillingFeatures.csv", files)]
+  
+  # Load the matching CSV files
+  data <- lapply(matching_files, function(file) {
+    read.csv(file.path(path, file))
+  })
+  
+  # Now 'data' is a list containing the data from the matching CSV files for the current exp.ID
+  # You can process the data here as needed for each exp.ID
+
+
+setwd(genDir)
+Pooled.kf.df  <- read.csv(paste(label_dir,
+                                "/",
+                                clinical.iso.list.file,sep=""))
+
+
+
+list.of.KF.tables <- length(data)
+
+#i <-list.of.KF.tables[1]
+for ( i in seq_along(data) ) {
+  
+  #print(i)
+  data.subset <- data[[i]]
+  
+  
+  Pooled.kf.df <- left_join(  Pooled.kf.df ,
+                              data.subset ,
+                              by ="Isolate")
+  
+  rm(  data.subset )
+}
+
+rm(i,
+   data)
+
+
+
+# Section 5: Idenitifying colunms to drop
+
+list.of.variables <- names(Pooled.kf.df)
+list.of.variables <- list.of.variables[-1]
+
+list.of.variables.to.drop <- c()
+
+# Track progress
+total_variables <- as.numeric(length(list.of.variables))
+progress <- 0
+
+
+# for each colunm, check if there is at least 50% measured value of each variable
+for ( i in list.of.variables) {
+  
+   progress <- progress + 1
+ 
+  Pooled.kf.df.subset <- Pooled.kf.df %>%
+    ungroup()%>%
+    select(Isolate,
+           i)%>%
+    drop_na()
+  
+  Half.N.of.Isolates <- (nrow(Pooled.kf.df.subset)/2)
+  
+  
+    N.unique.Values <- Pooled.kf.df.subset %>%
+      select(i)%>%
+      distinct()
+    
+        N.unique.Values <- nrow(N.unique.Values )
+    
+    
+  if (  N.unique.Values <  Half.N.of.Isolates  ){
+    
+    
+    list.of.variables.to.drop <- c( list.of.variables.to.drop,i)
+    
+  }else{
+    
+
+    }
+  
+  
+  
+}
+
+
+Pooled.kf.df.meaningFul <- Pooled.kf.df %>%
+  select(-one_of(list.of.variables.to.drop))
+
+
+#Houskeeping
+rm(Pooled.kf.df.subset,
+   kf.df,
+   Pooled.kf.df)
+
+
+ASCT.experiments <-  sub("_(.*)", "", id)
+
+for ( x in ASCT.experiments) {
+  print(x)
+  Pooled.kf.df.meaningFul.subset <- Pooled.kf.df.meaningFul %>%
+    select(Isolate,
+           matches(x))
+  
+  
+  Col.Names <- grep(".lg10", colnames(  Pooled.kf.df.meaningFul.subset), value = TRUE)
+
+
+New.Col.Names <- gsub(".lg10","-lg10",Col.Names )
+
+# Rename columns with "-lg10"
+for (j in seq_along(Col.Names)) {
+  colnames(  Pooled.kf.df.meaningFul.subset)[colnames(  Pooled.kf.df.meaningFul.subset) == Col.Names[j]] <- New.Col.Names[j]
+}
+
+
+drug <-  sub("_(.*)", "", names(Pooled.kf.df.meaningFul.subset[2]))
+
+export.file.path <- paste(results.dir,
+                          "/ASCT_1_curated_variability/",
+                          x,
+                          "_",
+                          drug,
+                          "_",
+                          type.of.normalisation.analysis,
+                          
+                          "_1_Killing_Features.csv",
+                 sep="")
+
+message(paste("Exporting: ",  i , drug ))
+
+
+write.csv( Pooled.kf.df.meaningFul.subset,
+   export.file.path ,
+      row.names = FALSE)
+
+
+}
+
+
+message( "Curating for variability script is complte for exp: ", x )
+
+end <- Sys.time()
+
+# Calculate elapsed time in minutes using UTC time zone
+elapsed_time_minutes <- round(as.numeric(difftime(end, start, units = "mins")))
+
+# Print the elapsed time in minutes
+cat("Elapsed time:", elapsed_time_minutes, "minutes\n")
+
+
+
+}
+
+
+```

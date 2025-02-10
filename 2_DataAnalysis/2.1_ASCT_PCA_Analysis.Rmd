@@ -1,0 +1,813 @@
+
+# Aim
+```{r}
+# ==================================================================
+# Script for PCA Analysis of Killing Features in ASCT Experiments
+# ==================================================================
+# This R script automates Principal Component Analysis (PCA) 
+# on Live Cell Fraction (LCF) killing features across multiple 
+# ASCT experiments. It identifies outliers using Mahalanobis 
+# distance measures and filters data accordingly.
+#
+# Functionality:
+# - Defines paths and experiment-specific parameters.
+# - Iterates over a list of ASCT experiments and retrieves 
+#   curated killing feature datasets.
+# - Performs PCA to reduce dimensionality and extract key 
+#   patterns in killing feature data.
+# - Applies Mahalanobis distance-based outlier detection.
+# - Filters and removes outliers to enhance statistical integrity.
+# - Exports curated PCA-excluded datasets for downstream analysis.
+#
+# Usage:
+# - Modify `list.of.experiments.for.loop` to specify ASCT experiments.
+# - Ensure required CSV files are present in specified directories.
+#
+# This script is essential for detecting outliers in high-dimensional
+# killing feature datasets, refining PCA-based classifications, and
+# preparing data for robust statistical analyses.
+
+```
+
+
+#3) PCA across AUCs: 0-24 , 24-48, 48-72 :: WORK (str2) ----
+```{r setup, include=FALSE}
+
+PCA.strategy <- ("PCAstr.allLCF")
+
+# ASCT experiments you wish to curate
+start <- Sys.time()
+list.of.experiments.for.loop <- c("ASCT.03",
+                                  "ASCT.05",
+                                  "ASCT.06",
+                                  "ASCT.10",
+                                 "ASCT.23",
+             "ASCT.04",
+                                  "ASCT.07",
+                                   "ASCT.08",
+                                  "ASCT.09",
+                                  "ASCT.12",
+                                  "ASCT.13",
+                                  "ASCT.14",
+                                  "ASCT.15",
+                                  "ASCT.16",
+                                  "ASCT.18",
+                                  "ASCT.19",
+                                  "ASCT.20",
+                                  "ASCT.21",
+                                  "ASCT.22",
+                                  "ASCT.24"
+                                  )
+#list.of.experiments.for.loop <- c("ASCT.03")
+
+
+# list.of.experiments.for.loop <- c("ASCT.03",
+#                                   "ASCT.05",
+#                                   "ASCT.06",
+#                                   "ASCT.10",
+#                                   "ASCT.23"
+#                                   )
+
+
+#list.of.experiments.for.loop <- c("ASCT.10")
+                                  
+
+
+genDir <- getwd() 
+
+# List of experiment you wish to analyze. This script will not loop through experiment but will be run on one experiment then another
+#Pop data variables
+data.dir <- c("ASCT_Experimental_Results/ASCT_1.1_growthThrs")
+res.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+
+
+res.dir2 <- c("Experimental_Results/PCAoutlier_Analysis")
+
+wdDir <- genDir
+
+data.dir <- paste(genDir,"/",data.dir ,sep="")
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+
+
+res.dir.PCAoutlier.table <-paste(genDir,"/",res.dir2 ,sep="")
+setwd(wdDir)
+
+
+exp.element <- list.of.experiments.for.loop[1]
+
+
+
+for ( exp.element in list.of.experiments.for.loop ) {
+Please.analyse <- exp.element 
+
+
+start <- Sys.time()
+
+
+# SECTION 2: Loading packages
+
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+
+# Mutlitvariant distribution packagage 
+#library(MGMM)
+library(mclust)
+
+
+# SECTION 3: PCA analysis on live cell fraction  killing features
+# PCA, or Principal Component Analysis, is a statistical technique used to simplify complex datasets and identify patterns in the data. It reduces the dimensionality of the data, meaning it takes a large number of variables and transforms them into a smaller set of uncorrelated variables called principal components. Here we start by doing PCA only by drug. We do not split by time-kill definition
+
+## 3.1 Loading time kill features data
+# 
+# Load only killing features data defined in the veariable "Please.analyse". This will allow more control during analysis without moving or renaming the input data.
+
+
+list.of.kf.data <- list.files(data.dir)
+
+
+
+# Initialize an empty list to store matched elements
+list.of.kf.data.specific <- list()
+
+# Loop through each element in the list
+for (element in list.of.kf.data) {
+  # Check if the element contains any string from the vector
+  if (any(grepl(paste(Please.analyse, collapse = "|"), element))) {
+    list.of.kf.data.specific <- append(list.of.kf.data.specific, list(element))
+  }
+}
+
+# Resulting list with matched elements
+list.of.kf.data.specific <- unlist(list.of.kf.data.specific )
+
+list.of.kf.data.specific <- list.of.kf.data.specific[!grepl(".pdf", list.of.kf.data.specific) & !grepl("_GrowthEval-S-HR-R.csv", list.of.kf.data.specific)]
+
+
+# Housekeeping
+rm(list.of.kf.data,
+   element)
+
+#GT.KF.table <- list.of.kf.data.specific[1]
+length.of.list <- length(list.of.kf.data.specific)
+
+
+# Here we will loop across each GT killing feature table and apply MD calculation Just 3sd
+
+progress <- 0
+
+#GT.KF.table <- list.of.kf.data.specific[1]
+for( GT.KF.table in list.of.kf.data.specific ) {
+  
+
+  KF.table.pca.timekill.def <- read.csv(paste(data.dir,"/",GT.KF.table,sep=""))
+
+
+# Renaming colunms incase the were not 
+  Col.Names <- grep(".lg10", colnames(   KF.table.pca.timekill.def ), value = TRUE)
+  New.Col.Names <- gsub(".lg10","-lg10",Col.Names )
+
+  # Rename columns with "-lg10"
+  for (i in seq_along(Col.Names)) {
+  colnames(  KF.table.pca.timekill.def )[colnames(   KF.table.pca.timekill.def ) == Col.Names[i]] <- New.Col.Names[i] 
+  }
+  
+
+
+  KF.table.pca.timekill.def  <- melt(    KF.table.pca.timekill.def , id.vars = "Isolate", variable.name = "Killing.Features", value.name = "Value")
+
+# if character do this else do nothing
+
+ KF.table.pca.timekill.def <- KF.table.pca.timekill.def %>%
+   mutate(Value = as.character(Value))%>%
+  mutate(Value =if_else(Value == ">72", "72", Value),
+                         Value)
+
+
+  KF.table.pca.timekill.def <- separate(  KF.table.pca.timekill.def, col = Killing.Features,
+                         into = c("Abx.con",
+                                 "Strategy",
+                                "Def",
+                                "KF",
+                                "time",
+                                "Experiment"),
+                       sep="_")
+  
+    KF.table.pca.timekill.def <-   KF.table.pca.timekill.def  %>%
+      mutate(Killing.Features = paste(Def,
+                                      KF,
+                                      time,
+                                      Strategy,
+                                      sep="_"))%>%
+      mutate(Value = as.numeric(Value))%>%
+      mutate(Abx.con = paste(Abx.con,
+                             Def,
+                             Strategy,sep="_"))
+    
+ 
+list.of.drugs <- unique(KF.table.pca.timekill.def$Abx.con) 
+
+pca.scores <- data.frame(PC1 = numeric(),
+                         PC2 = numeric(),
+                         Isolates = character(),
+                         Abx.con = character(),
+                         var.pc1 = numeric(),
+                         var.pc2 = numeric(),
+                         stringsAsFactors = FALSE)
+
+      
+for ( i in list.of.drugs ) {
+  
+  
+       KF.table.pca.timekill.def.subset <-   KF.table.pca.timekill.def  %>%
+        select(Isolate,
+               Abx.con,
+               Def,
+               KF,
+               Killing.Features,
+               Value)%>%
+          filter(Abx.con == i)%>%
+           filter(!grepl(".lg10", Killing.Features))%>%
+          filter(KF == "LCF")%>% # Selecting only the LCF killing feature to apply PCA on
+         
+           filter(Value != -Inf)%>%
+         drop_na()
+        
+        
+          KF.table.pca.timekill.def.subset <-       KF.table.pca.timekill.def.subset %>%
+          select(Isolate,
+                 Abx.con,
+                 Killing.Features,
+                 Value)%>%
+          spread(Killing.Features,
+                 Value)%>%
+            drop_na()
+
+
+LIST.iso.present.in.GT.KF.table <-unique (KF.table.pca.timekill.def.subset$Isolate)
+
+
+# Perform PCA
+pca <- prcomp(select(      KF.table.pca.timekill.def.subset , -Isolate, -Abx.con), scale = TRUE)
+
+# Extract PCA scores
+scores <- as.data.frame(pca$x[, 1:2])
+
+
+# Calculate the proportion of variance for PC1 and PC2
+variance_explained <- pca$sdev^2 / sum(pca$sdev^2)
+variance_pc1 <- variance_explained[1]*100
+variance_pc2 <- variance_explained[2]*100
+
+scores$isolate <- KF.table.pca.timekill.def.subset$Isolate
+scores$Abx.con <- KF.table.pca.timekill.def.subset$Abx.con
+scores$var.pc1 <- variance_pc1
+scores$var.pc2 <- variance_pc2
+
+pca.scores <- rbind(pca.scores,
+                    scores)
+  
+}
+
+rm(pca,
+   scores)
+
+
+   
+pca.scores <- pca.scores %>%
+  mutate(Abx.con_TimeKilldef = Abx.con)%>%
+  select(-Abx.con)
+
+
+pca.scores <- separate( pca.scores, col = Abx.con_TimeKilldef,
+                       into = c("Abx.con",
+                                "Def",
+                                "Strategy"),
+                       sep="_")
+
+pca.scores <- pca.scores %>%
+  mutate(Time.Kill.def = paste(Def,
+                               Strategy,sep="_"))%>%
+  select(-Def,
+         -Strategy)
+
+  
+  ## 3.2 Mahalanobis PCA outlier detection defintion: 
+#The Mahalanobis definitions will be applied
+#The Mahalanobis distance measures the distance of each point from the center of the distribution in the PCA space.
+  pca.scores.mahalanobis.res <- data.frame(
+    Isolate= character(),
+    Abx.con = character(),
+    Time.Kill.def  = character(),
+    PC1 = numeric(),
+    PC2 = numeric(),
+    var.pc1 = numeric(),
+    var.pc2 = numeric(),
+    Mahalanobis.distance = numeric(),
+    MD.2sd = character(),
+    MD.3sd = character())
+
+pca.scores <- pca.scores %>%
+  mutate(loop.var = paste(Abx.con,
+                          Time.Kill.def,
+                          sep="_"))
+
+list.of.drugs.Time.kill.def <- unique(pca.scores$loop.var)
+
+
+## 3.2 Mahalanobis PCA outlier detection defintion: 
+#The Mahalanobis definitions will be applied
+#The Mahalanobis distance measures the distance of each point from the center of the distribution in the PCA space.
+
+i <- list.of.drugs.Time.kill.def[1]
+for ( i in list.of.drugs.Time.kill.def) {
+  
+    tryCatch ({
+  pca.scores.mahalanobis.subet <- pca.scores %>%
+  mutate(Isolate =isolate)%>%
+  filter(loop.var == i)%>%
+  select(PC1,
+         PC2)
+  
+  pca.scores.mahalanobis.subet2 <- pca.scores %>%
+  mutate(Isolate =isolate)%>%
+  filter(loop.var == i)%>%
+  select(Isolate,
+         Time.Kill.def,
+         Abx.con,
+         PC1,
+         PC2,
+             var.pc1,
+             var.pc2)
+
+  # Calculate the covariance matrix
+  cov_matrix <- cov( pca.scores.mahalanobis.subet)
+
+  # Calculate the Mahalanobis distance for each data point
+  mahalanobis_dist <- mahalanobis( pca.scores.mahalanobis.subet, colMeans( pca.scores.mahalanobis.subet), cov_matrix)
+
+  pca.scores.mahalanobis.res.subset <- data.frame (
+    
+  Isolate = pca.scores.mahalanobis.subet2$Isolate,
+  Abx.con = pca.scores.mahalanobis.subet2$Abx.con,
+  Time.Kill.def = pca.scores.mahalanobis.subet2$Time.Kill.def ,
+  PC1 = pca.scores.mahalanobis.subet2$PC1,
+  PC2 = pca.scores.mahalanobis.subet2$PC2,
+  var.pc1 = pca.scores.mahalanobis.subet2$var.pc1,
+  var.pc2 = pca.scores.mahalanobis.subet2$var.pc2,
+  Mahalanobis.distance = mahalanobis_dist
+  
+  )
+
+  # Outlier defintion for Mahalanobis 
+  Outlier.def1 <- mean(pca.scores.mahalanobis.res.subset$Mahalanobis.distance) + 2*sd(pca.scores.mahalanobis.res.subset$Mahalanobis.distance)
+  Outlier.def2 <- mean(pca.scores.mahalanobis.res.subset$Mahalanobis.distance) + 3*sd(pca.scores.mahalanobis.res.subset$Mahalanobis.distance)
+
+  pca.scores.mahalanobis.res.subset  <- pca.scores.mahalanobis.res.subset  %>%
+  mutate(MD.2sd = if_else(  Mahalanobis.distance >= Outlier.def1, "MD.2sd", ""),
+        MD.3sd =if_else(  Mahalanobis.distance >= Outlier.def2,"MD.3sd", "" ))
+
+
+  pca.scores.mahalanobis.res <- rbind(pca.scores.mahalanobis.res,
+                                     pca.scores.mahalanobis.res.subset)
+
+  #Houskeeping
+  rm(
+    Outlier.def1,
+   Outlier.def2,
+   pca.scores.mahalanobis.subet,
+   pca.scores.mahalanobis.subet2,
+   pca.scores.mahalanobis.res.subset,
+   cov_matrix,
+   mahalanobis_dist
+   )
+  
+  # Export intermediary Mahalanobis output to be merged with time kill kinetics
+  # need to know what exlcusion criteria is it 
+  
+  export.path.ASCT_4_figures <- paste(gsub("ASCT_2_curated_PCA","ASCT_4_Figures/PCA-analysis",res.dir ),
+                                      "/",
+                                      gsub("_1_Killing_Features.csv","",GT.KF.table),
+                                      "_",
+                                       PCA.strategy,
+                                      ".csv",
+                    
+                                      sep=""
+                                     )
+  
+
+ 
+  write.csv(pca.scores.mahalanobis.res,
+              export.path.ASCT_4_figures,
+            row.names = FALSE)
+  
+  
+  
+}, error = function(e) {
+    # Handle the error (optional)
+    cat("An error occurred in iteration", i, ":", conditionMessage(e), "\n")
+  })
+  
+}
+
+ str(pca.scores.mahalanobis.res)
+## 3.3 Mahalanobis outlier definition and plot
+
+  # Melt the dataframe
+  pca.scores.mahalanobis.res <- melt(pca.scores.mahalanobis.res, id.vars = c("Isolate", "Abx.con", "Time.Kill.def", "PC1", "PC2", "var.pc1", "var.pc2", "Mahalanobis.distance"),
+                  measure.vars = c("MD.2sd", "MD.3sd"),
+                  variable.name = "Outlier_def",
+                  value.name = "Outlier_value")
+  
+   pca.scores.mahalanobis.res <- pca.scores.mahalanobis.res  %>%
+    mutate(PC.variance = paste("PC1:", signif(var.pc1, digits = 3), "%", " PC2:" , signif(var.pc2, digits = 3), "%" ,sep =""))%>%
+     select(-var.pc1,
+            -var.pc2)
+   
+   
+# Adding definiton for Population analysis and tracking data
+      pca.scores.mahalanobis.res <- pca.scores.mahalanobis.res  %>%
+        mutate(Type.of.Analysis = if_else(grepl("_Trkv", Time.Kill.def), "Tracking analysis", "Population analysis"))
+
+#--- Plotting PCA results 
+
+
+  fig.filename <- paste(res.dir, "/",
+                        gsub("1_Killing_Features.csv","",GT.KF.table),
+              
+                    "1_2_Killing_Features_MahalanDist_",
+               
+                        PCA.strategy,
+                    "_",
+                    format(Sys.time(), "%Y%m%d"),".pdf",sep="")
+  
+
+
+  gg <-pca.scores.mahalanobis.res%>%
+  ungroup()%>%
+    group_by(Isolate,
+             Abx.con,
+             Time.Kill.def,
+             Outlier_def)%>%
+        mutate(Outlier_plot_Iso = if_else(Outlier_value != "" , Isolate, ""))%>%
+
+    ggplot(aes(x = PC1, 
+                             y = PC2 , 
+                             colour = Outlier_value,
+                label = if_else(Outlier_plot_Iso != "", Isolate, ""))) +
+    geom_text(size = 0.25)+
+   geom_point(
+             size = 1, alpha = 0.50,
+             shape = ".") +
+      scale_color_manual(values = c("Normal"="black",
+                                    "MD.2sd"="red",
+                                   "MD.3sd"="blue"))+
+  labs(x = "PC1",
+       y = "PC2",
+       color = " Mahalanobis outlier defintion")+
+    labs(title = paste(Please.analyse,   unique(pca.scores.mahalanobis.res$Abx.con),"Outlier Detection using Mahalanobis distance measure"))+
+   theme_bw()+
+    theme(legend.position = "bottom", 
+         legend.box = "horizontal",
+             strip.text = element_text(size = 1) # Adjust the size as needed
+)+
+    theme(strip.text = element_text(size = 5))+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 5, hjust = 1))+
+   theme(axis.text.y = element_text(
+    size = 5))+
+   theme(aspect.ratio = 1)+
+
+ facet_wrap_paginate(Type.of.Analysis+ Time.Kill.def~ PC.variance ,
+                      ncol =2,
+                      nrow=2,
+                      page =1)
+
+
+n <- n_pages(gg)
+
+pdf(fig.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(Type.of.Analysis + Time.Kill.def ~ PC.variance ,
+                      ncol =3,
+                      nrow=1, page = i)) 
+}
+dev.off()
+
+
+#Houskeeping
+rm(gg,
+     fig.filename )
+
+pca.scores.mahalanobis.res <- pca.scores.mahalanobis.res %>%
+select(-Type.of.Analysis)
+
+
+
+pca.scores.mahalanobis.res <- pca.scores.mahalanobis.res %>%
+  ungroup()%>%
+  group_by(Abx.con,
+           Time.Kill.def,
+           Outlier_def)%>%
+  mutate(PC.outliers = if_else( Outlier_value == "MD.3sd" | Outlier_value == "MD.2sd"  , Isolate ,""))%>%
+  ungroup()%>%
+  mutate(PC.outliers = gsub("Iso.","", PC.outliers))%>%
+  select(Isolate,
+         Abx.con,
+         Time.Kill.def,
+         PC1,
+         PC2,
+         Outlier_def,
+         PC.outliers)
+  
+# here you can combine more PCA outlier defintion MD , MVG , manual? 
+pca.scores <- pca.scores.mahalanobis.res
+
+rm(pca.scores.mahalanobis.res,
+   KF.table.pca.timekill.def,
+   KF.table.pca.timekill.def.subset,
+   variance_explained,
+   variance_pc1,
+   variance_pc2,
+   n)
+
+
+## 3.5 Filtering outliers and export
+#Here, we aim to identify the outlier isolates based on PCA analysis, then identify the drug and time kill definition that results in this outlier convert the #results value of each killing feature to NA. This will lower the potential of poor stastistical analysis that may be driven by outliers.
+
+KF.table.reloaded <-  read.csv(paste(data.dir,"/",GT.KF.table,sep=""))
+
+  # Rename columns with "-lg10"
+
+  Col.Names <- grep(".lg10", colnames(   KF.table.reloaded ), value = TRUE)
+  
+  New.Col.Names <- gsub(".lg10","-lg10",Col.Names )
+  
+  for (i in seq_along(Col.Names)) {
+    
+  colnames( KF.table.reloaded )[colnames(   KF.table.reloaded ) == Col.Names[i]] <- New.Col.Names[i] 
+  
+  }
+
+
+  # Create an empty data frame to store the corrected data
+  corrected_df <- KF.table.reloaded %>%
+    mutate(Outlier_def = NA)%>%
+    slice(0)
+  
+  pca.scores <- pca.scores %>%
+  mutate(Outlier_def = as.character(Outlier_def))
+  
+
+list.of.pca.outlier.def <- unique(pca.scores$Outlier_def)
+#Outlier.def.list <- list.of.pca.outlier.def[1]
+
+
+for (Outlier.def.list in  list.of.pca.outlier.def  ) {
+  
+  message(Outlier.def.list)
+  
+  # Identifying  Isolates flagged to be PCA outliers
+  Flagged.PCA.outliers <- pca.scores %>%
+  filter(Outlier_def == Outlier.def.list) %>%
+  select(-Outlier_def)%>%
+  filter(PC.outliers != "")
+
+  Flagged.PCA.outliers <- Flagged.PCA.outliers %>%
+  mutate(flagged.col = paste(Abx.con,
+                             Time.Kill.def,
+                             sep ="_"))%>%
+  select(Isolate,
+         flagged.col)
+  
+  Flagged.PCA.outliers <- Flagged.PCA.outliers %>%
+    separate(flagged.col , into = c("Abx.con",
+                                    "part2",
+                                    "part1"), sep ="_")%>%
+    mutate(flagged.col.2 = paste(Abx.con,
+                                 part1,
+                                 part2, sep ="_"))%>%
+    select(Isolate,
+           flagged.col.2)%>%
+    distinct()
+
+  
+   list.of.isolates <- unique(  Flagged.PCA.outliers$Isolate)
+  # Loop through each isolate
+  for (i  in list.of.isolates) {
+  
+    message(i)
+    
+  #Filter the data for the current isolate
+   KF.table.reloaded.subset <- KF.table.reloaded %>% filter(Isolate == i)
+ 
+  Flagged.PCA.outliers.subset <-   Flagged.PCA.outliers %>%
+    filter(Isolate == i)
+  
+
+    list.of.flagged.col <-   Flagged.PCA.outliers.subset$flagged.col.2
+    
+    
+  for ( j  in list.of.flagged.col ) {
+    
+    message (j )
+   
+ 
+    # Set all values in the columns to NA
+    KF.table.reloaded.subset.subset <-  KF.table.reloaded.subset %>% 
+     mutate(across(starts_with(j), ~ NA))%>%
+      mutate(Outlier_def = Outlier.def.list)
+
+    
+  
+    # Append the filtered and corrected data to the final data frame
+   corrected_df <- rbind(corrected_df,  KF.table.reloaded.subset.subset)
+   
+
+    
+  }
+ 
+  }
+  
+}
+
+rm(i,
+   j,
+   list.of.pca.outlier.def,
+   list.of.flagged.col,
+   Flagged.PCA.outliers,
+   Flagged.PCA.outliers.subset,
+   list.of.Time.Kill.Definiton,
+   list.of.isolates,
+   KF.table.reloaded.subset,
+   KF.table.reloaded.subset.subset
+   )
+
+# View the corrected data frame
+  corrected_df <- corrected_df %>%
+  ungroup() %>%
+  group_by(Isolate) %>%
+  distinct()
+
+  # Convert from wide to long format
+  corrected_df.MELTED <- melt(corrected_df, id.vars = c("Isolate" ,"Outlier_def"), variable.name = "Time.Kill.def", value.name = "KF.values")
+
+
+   corrected_df.MELTED <-  corrected_df.MELTED %>%
+   distinct()%>%
+     mutate(KF.values = as.character(KF.values))
+
+  # Get unique outlier definitions
+  list.of.PCAstrategies <- unique(corrected_df.MELTED$Outlier_def)
+
+# Create an empty data frame to store the corrected data
+KF.table.reloaded.PCA.corrected.FINAL <- data.frame(
+  Isolate = character(),
+  Outlier_def = character(),
+  Time.Kill.def = character(),
+  KF.values = character(),
+  stringsAsFactors = FALSE
+)
+
+
+# Loop through PCA strategies
+for (list.of.PCAstrategies in list.of.PCAstrategies) {
+  
+  message(paste(">>>>",list.of.PCAstrategies ,sep=""))
+  corrected_df_subset <- corrected_df.MELTED %>%
+    filter(Outlier_def == list.of.PCAstrategies) %>%
+     #   filter(Outlier_def == "MD.2sd") %>%
+
+    distinct()
+
+  # Get unique isolates
+  list.of.isolates <- unique(corrected_df_subset$Isolate)
+  n.of.isolates <- length(    list.of.isolates )
+  progress <- 0
+      
+   #   i <-   list.of.isolates[1]
+  for (i in list.of.isolates) {
+    
+    
+    progress <- progress +1    
+    message(paste( i, ":", progress, "/",  n.of.isolates, sep=" "))
+    
+    corrected_df.subset <- corrected_df_subset %>%
+      filter(Isolate == i)
+
+    list.of.Time.Kill.Definition <- unique(corrected_df.subset$Time.Kill.def)
+    for (j in list.of.Time.Kill.Definition) {
+      corrected_df.subset.2 <- corrected_df.subset %>%
+        filter(Time.Kill.def == j)
+
+      # Check if NA values are present
+      if (anyNA(corrected_df.subset.2$KF.values)) {
+        KF.table.reloaded.PCA.corrected.FINAL <- bind_rows(KF.table.reloaded.PCA.corrected.FINAL, corrected_df.subset.2 %>% filter(is.na(KF.values)))
+      } else {
+        KF.table.reloaded.PCA.corrected.FINAL <- bind_rows(KF.table.reloaded.PCA.corrected.FINAL, corrected_df.subset.2)
+      }
+    }
+  }
+}
+# Save intermediary CSV
+#write.csv(KF.table.reloaded.PCA.corrected.FINAL, "KFpca_MDKFcorr_v0.csv", row.names = FALSE)
+
+  rm(corrected_df.subset.3,
+     corrected_df.subset.2,
+     corrected_df.subset,
+     corrected_df,
+     list.of.drugs,
+     list.of.drugs.Time.kill.def,
+     list.of.isolates,
+     n.of.isolates,
+     New.Col.Names,
+     Outlier.def.list,
+     progress,
+     i,j)
+  
+  KF.table.reloaded.PCA.corrected.FINAL<-KF.table.reloaded.PCA.corrected.FINAL%>%
+    distinct()
+  
+  
+KF.table.reloaded.PCA.corrected.FINAL <- KF.table.reloaded.PCA.corrected.FINAL %>%
+      spread(Time.Kill.def, KF.values)
+
+
+list.of.PCAstrategies <- unique(KF.table.reloaded.PCA.corrected.FINAL$Outlier_def)
+#x <- list.of.PCAstrategies[1]
+for ( x in list.of.PCAstrategies) {
+  
+    KF.table.reloaded.PCA.corrected.FINAL.subset <- KF.table.reloaded.PCA.corrected.FINAL %>%
+    filter(Outlier_def == x)%>%
+    select(-Outlier_def)
+  
+    KF.table.reloaded.noPCAiso <- KF.table.reloaded %>%
+    filter(!Isolate %in% unique(  KF.table.reloaded.PCA.corrected.FINAL.subset$Isolate))
+
+
+    KF.table.reloaded.noPCAiso <- rbind(KF.table.reloaded.noPCAiso,
+                                          KF.table.reloaded.PCA.corrected.FINAL.subset )
+
+
+
+
+ filename.path <- paste(res.dir, "/",
+                        
+                        gsub("_1_Killing_Features.csv","_1_2_Killing_Features_PCAexl_",GT.KF.table),
+                        x,
+                         "_",
+                        PCA.strategy,
+          
+                        "_",format(Sys.time(), "%Y%m%d") ,".csv",sep="")
+
+
+  write.csv(KF.table.reloaded.noPCAiso, file = filename.path ,
+          row.names = FALSE)
+  
+  
+  No.PCA.exlusion <-  read.csv(paste(data.dir,"/",GT.KF.table,sep=""))
+  
+  
+ filename.path.NoPCA <- paste(res.dir, "/",
+                        
+                        gsub("_1_Killing_Features.csv","_1_2_Killing_Features_PCAexl_",GT.KF.table),
+                        "MD.0sd",
+                        "_",
+                        PCA.strategy,
+                        "_",format(Sys.time(), "%Y%m%d") ,".csv",sep="")
+ 
+  write.csv(  No.PCA.exlusion , file =  filename.path.NoPCA  ,
+          row.names = FALSE)
+
+  
+
+  
+}
+  
+}
+
+
+# Your script code goes here
+end <- Sys.time()
+
+# Calculate elapsed time in minutes using UTC time zone
+elapsed_time_minutes <- round(as.numeric(difftime(end, start, units = "mins")))
+
+# Print the elapsed time in minutes
+cat("Elapsed time:", elapsed_time_minutes, "minutes\n")
+
+
+cat("Perfect! Step 2 of the analysis of exp ", Please.analyse, "is complete")
+
+}
+```

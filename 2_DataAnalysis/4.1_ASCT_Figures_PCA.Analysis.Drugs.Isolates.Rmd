@@ -1,0 +1,783 @@
+
+# Aim
+```{r}
+# ==================================================================
+# Summary: PCA-Based Analysis of Antibiotic-Isolate Relationships
+# ==================================================================
+# Aim:
+# This script evaluates relationships in PCA space, focusing on:
+# 1. Rows: Isolates vs. Columns: Drugs
+# 
+# Methodology:
+# - Uses imputation (missMDA) for handling missing values.
+# - Generates a correlation matrix without imputation.
+# - Performs PCA on antibiotic conditions and isolates.
+# - Visualizes PCA distributions using scatter plots.
+# - Computes and analyzes a correlation matrix for drugs.
+# - Examines PCA clustering based on antibiotic mechanism of action.
+# - Merges PCA results with species and clinical metadata.
+# - Outputs various visualizations in PDF format.
+
+# Key Outputs:
+# - Waterfall plot showing missing data distribution.
+# - PCA plots for conditions (drugs) and isolates.
+# - Correlation matrix PCA for drugs and isolates.
+# - PCA clustering based on antibiotic mechanisms.
+# - Integration of clinical metadata for further insights.
+
+# Next Steps:
+# - Optimize missing data handling strategies.
+# - Explore additional PCA components.
+# - Validate clustering results with external metadata.
+
+```
+
+
+
+#1. Defining variables
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+
+#Pop data variables
+data.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+res.dir <- c("ASCT_Experimental_Results/ASCT_4_Figures")
+
+exp.res.dir <- c(paste(genDir,
+                       "/",
+                       "ASCT_Experimental_Results/ASCT_4_Figures",sep=""))
+wdDir <- genDir
+
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+data.dir <- paste(genDir,"/",data.dir,sep="")
+setwd(wdDir)
+
+# list the experiment directories to pull the tracking data
+# Get today's date
+today <- Sys.Date()
+
+# Format the date as YYYYMMDD
+formatted_date <- format(today, "%Y%m%d")
+
+
+# EDIT the time scale axis that should be used 
+plot.xaxis.time.scale <- c(0,12,24,36,48,60,72)
+
+```
+
+#2. Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+
+
+# Dealing with missing values
+#install.packages("missMDA")
+library(missMDA)
+# Link to website on how to use miss MDA http://factominer.free.fr/missMDA/PCA.html
+library(ggcorrplot)
+
+library(data.table)
+library(FactoMineR)  # Link to website on how to use miss MDA http://factominer.free.fr/missMDA/PCA.html
+
+
+
+```
+
+#3. Load all PCA exl data
+```{r}
+
+#Creacting vector with the list of file names
+PCA.list <- list.files(path = data.dir ,
+                            pattern = "_GTManual.HR.R.growth_1_2_Killing_Features_PCAexl_MD.0sd_PCAstr.allLCF_",
+                            full.names = FALSE)
+
+#setting path to where all the csv files due to be processed are
+#setwd(i)
+
+path.to.data <- ("/Users/Alex/Documents/PhD/PhD_project/PhD_project-Tolerance/R-ANALYSIS/Ranalysis_perwell/Ranalysis_perWell_TLKK/ASCT_Analysis_AJ_orginal/ASCT_EXPERIMENTS_v2-critical/ASCT.Ranalysis_KF_Variability_PCA_Statistics/ASCT_Experimental_Results/ASCT_2_curated_PCA/")
+
+#i <- PCA.list[1]
+
+KF.df <- data.frame()
+for ( i in PCA.list) {
+  
+  
+  kf.sub <- read.csv(paste(path.to.data,
+                           i,
+                           sep=""))
+  
+  kf.sub <- kf.sub %>%
+      select(Isolate,
+             contains("Trkv2_Ila2BaSic_AUCrt_0.72h_"))
+
+  
+  kf.sub <- melt(  kf.sub , variable.name = "Feature",
+                   value.name = "value")
+    
+  KF.df <- rbind(KF.df,
+                 kf.sub)
+    
+}
+
+rm(kf.sub)
+
+```
+
+##3.1 data wrangling 
+```{r}
+
+KF.df<- separate(KF.df, col = "Feature", 
+                  into =c("Abx.con",
+                          "Tracking",
+                          "Ilastik",
+                          "AUCrt",
+                          "AUCrtrange",
+                          "ExpID"),
+                          
+                          sep="_")
+ 
+
+KF.df<- KF.df %>%
+  mutate(Killing.Definiton = paste(Tracking,
+                                   Ilastik,
+                                   sep="_"),
+         Killing.Feature = paste(AUCrt,
+                                 AUCrtrange,
+                                 sep="_") )%>%
+  select(ExpID,
+         Isolate,
+         Abx.con,
+        
+         Killing.Definiton,
+         Killing.Feature,
+         value)
+
+
+
+```
+
+## 3.2 Waterfall plot of the amount of NAs
+```{r}
+
+KF.df.NAs <- KF.df %>%
+    filter(Abx.con != "BDQ.20x")%>%
+  ungroup()%>%
+  group_by(Isolate)%>%
+    mutate(value_NAs = sum(is.na(value)))%>%
+  ungroup()%>%
+  select(Isolate,
+         value_NAs)%>%
+  distinct()%>%
+  group_by(value_NAs)%>%
+  mutate(Number.Isolate = 1)%>%
+  mutate(Number.Isolate = sum (Number.Isolate))%>%
+  ungroup()%>%
+  mutate(Percentage.Missing = (Number.Isolate / 416)*100)
+
+
+
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_MissingData_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+ KF.df.NAs %>%
+  select(value_NAs,
+         Number.Isolate,
+         Percentage.Missing) %>%
+  distinct() %>%
+  ggplot(aes(y = Number.Isolate,
+             x = value_NAs,
+             label = paste0(round(Percentage.Missing,3) , "%"))) +
+     scale_x_continuous(limits = c(-1, 20), breaks = seq(0, 20, by = 1)) +
+
+  geom_bar(stat = "identity") +
+   theme_prism()+
+  labs(x = "Number of NAs",
+       y = "Number of Isolates",
+       title = "Barplot of missing values",
+       caption = "Percentage of Missing Data") +
+    geom_text(size = 1, color = "black", vjust = -0.5) +  # Adjust size and vjust
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ dev.off()
+
+ 
+ 
+ Isolates.present.in.Alldrugs <- KF.df.NAs %>%
+   filter(value_NAs == 0 )
+ 
+ 
+  Isolates.present.in.Alldrugs <- unique( Isolates.present.in.Alldrugs$Isolate)  
+```
+
+ 
+#4. PCA of only isolates present in all abx 
+```{r}
+
+KF.df.100.present <- KF.df %>%
+    filter(Abx.con != "BDQ.20x")%>%
+  filter(Isolate %in%  Isolates.present.in.Alldrugs)%>%
+          select(
+                 Abx.con,
+                 Isolate,
+                 value)%>%
+          spread(Isolate,
+                 value)
+
+
+Abx.list <- KF.df.100.present$Abx.con
+
+KF.df.100.present <- KF.df.100.present %>%
+  select(-Abx.con)
+
+
+# Perform PCA
+pca <- prcomp(KF.df.100.present, scale = TRUE)
+
+# Extract PCA scores
+scores <- as.data.frame(pca$x[, 1:2])
+
+
+# Calculate the proportion of variance for PC1 and PC2
+variance_explained <- pca$sdev^2 / sum(pca$sdev^2)
+variance_pc1 <- variance_explained[1]*100
+variance_pc2 <- variance_explained[2]*100
+
+
+scores$Abx.con <- Abx.list
+scores$var.pc1 <- variance_pc1
+scores$var.pc2 <- variance_pc2
+
+PCA.row.Abx_col.Iso.CONDpca.100present <- scores
+
+library(stringr)
+PCA.row.Abx_col.Iso.CONDpca.100present <-PCA.row.Abx_col.Iso.CONDpca.100present %>%
+  mutate(Abx = str_extract(Abx.con, "^[^.]+"))%>%
+  mutate(Abx = if_else(Abx == "IPMb", "IPM",
+                       if_else(Abx == "IPMc", "IPM",
+                               if_else(Abx == "MXFb", "MXF", Abx))))%>%
+mutate(Concentration = str_extract(Abx.con, "(?<=\\.).*"))
+
+
+
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_PCA_drugs.V.Iso-CONDITIONpca.Completly.present_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+PCA.row.Abx_col.Iso.CONDpca.100present %>%
+  ggplot(aes(x = PC1,
+             y = PC2,
+             colour = Abx,
+             label = Abx.con)) +
+  
+  geom_point(size = 1,
+             stroke = 0) +
+  geom_text(size = 1, color = "black", vjust = -0.5) +  # Adjust size and vjust
+     theme(aspect.ratio = 1)+
+   labs(x = paste("PC1 (", round(unique(PCA.row.Abx_col.Iso.CONDpca.100present$var.pc1),3), "%)" ,sep=""),
+       y = paste("PC2 (", round(unique(PCA.row.Abx_col.Iso.CONDpca.100present$var.pc2),3), "%)",sep=""),
+       title = "PCA conditions",
+       caption = paste("All iso present across all drugs (n", length(Isolates.present.in.Alldrugs), ")")) +
+
+  theme_prism()+
+   theme(legend.position = "none")
+dev.off()
+
+
+```
+
+
+#5. Imputation (missMDA)
+## 5.1 Handeling Nas in data
+### 5.1.1  Imputation and PCA with missing values
+```{r}
+
+Isolates.with.max.3missing.values <- KF.df.NAs %>%
+  filter(value_NAs <= 3)%>%
+  select(Isolate)%>%
+  distinct()
+
+Isolates.with.max.3missing.values <- Isolates.with.max.3missing.values$Isolate
+
+
+
+KF.df.na <- KF.df %>%
+  filter(Isolate %in% Isolates.with.max.3missing.values )%>%
+          select(
+                 Abx.con,
+                 Isolate,
+                 value)%>%
+          spread(Isolate,
+                 value)
+
+
+ # Link to website on how to use miss MDA http://factominer.free.fr/missMDA/PCA.html
+KF.df.na.main <- KF.df.na %>%
+  filter(Abx.con != "BDQ.20x")%>%
+  select(-Abx.con)
+
+Abx.list <- KF.df.na$Abx.con
+Abx.list <- Abx.list[Abx.list != "BDQ.20x"]
+#---
+
+nb <- estim_ncpPCA(KF.df.na.main, scale =TRUE)
+nb <-nb[["ncp"]]
+
+
+comp <- imputePCA(KF.df.na.main, ncp = nb, scale = TRUE)
+
+mi <- MIPCA(KF.df.na.main, scale = TRUE , ncp = nb)
+KF.df.na.Imputed.Conditions <- data.frame(comp$completeObs)
+
+# Perform PCA
+pca <- prcomp(KF.df.na.Imputed.Conditions, scale = TRUE)
+
+# Extract PCA scores
+scores <- as.data.frame(pca$x[, 1:2])
+
+
+# Calculate the proportion of variance for PC1 and PC2
+variance_explained <- pca$sdev^2 / sum(pca$sdev^2)
+variance_pc1 <- variance_explained[1]*100
+variance_pc2 <- variance_explained[2]*100
+
+
+scores$Abx.con <- Abx.list
+scores$var.pc1 <- variance_pc1
+scores$var.pc2 <- variance_pc2
+
+PCA.row.Abx_col.Iso.CONDpca <- scores
+
+library(stringr)
+PCA.row.Abx_col.Iso.CONDpca <-PCA.row.Abx_col.Iso.CONDpca%>%
+  mutate(Abx = str_extract(Abx.con, "^[^.]+"))%>%
+  mutate(Abx = if_else(Abx == "IPMb", "IPM",
+                       if_else(Abx == "IPMc", "IPM",
+                               if_else(Abx == "MXFb", "MXF", Abx))))%>%
+mutate(Concentration = str_extract(Abx.con, "(?<=\\.).*"))
+
+
+
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_PCA_drugs.V.Iso-CONDITIONpca.3missing_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+PCA.row.Abx_col.Iso.CONDpca %>%
+  ggplot(aes(x = PC1,
+             y = PC2,
+             colour = Abx,
+             label = Abx.con)) +
+  geom_point() +
+  geom_text(size = 1, color = "black", vjust = -0.5) +  # Adjust size and vjust
+     theme(aspect.ratio = 1)+
+
+  theme_prism()+
+   labs(x = paste("PC1 (", round(unique(PCA.row.Abx_col.Iso.CONDpca $var.pc1),3), "%)" ,sep=""),
+       y = paste("PC2 (", round(unique(PCA.row.Abx_col.Iso.CONDpca $var.pc2),3), "%)",sep=""),
+       title = "PCA conditions using imputation",
+       caption = paste("Isolates with max 3 missing values across all drugs (n", length(Isolates.with.max.3missing.values), ")")) +
+   theme(legend.position = "none")
+dev.off()
+
+
+#Housekeeping
+rm(mi,
+   comp,
+   pca,
+   scores)
+```
+
+
+###5.1.2 PCA Iso.Rows Drugs Cols PCAiso
+```{r}
+# Link to website on how to use miss MDA http://factominer.free.fr/missMDA/PCA.html
+KF.df.na.main.Iso <- KF.df.na %>%
+  filter(Abx.con != "BDQ.20x")%>%
+  select(-Abx.con)
+
+Abx.list <- KF.df.na$Abx.con
+Abx.list <- Abx.list[Abx.list != "BDQ.20x"]
+
+
+KF.df.na.main.Iso <- data.frame(t(KF.df.na.main.Iso))
+
+
+# Rename variables
+names(KF.df.na.main.Iso) <- Abx.list
+
+nb <- estim_ncpPCA(KF.df.na.main.Iso, scale =TRUE)
+nb <-nb[["ncp"]]
+
+
+comp <- imputePCA(KF.df.na.main.Iso, ncp = nb, scale = TRUE)
+
+KF.df.na.Imputed.Conditions <- data.frame(comp$completeObs)
+
+# Perform PCA
+pca <- prcomp(KF.df.na.Imputed.Conditions, scale = TRUE)
+
+# Extract PCA scores
+scores <- as.data.frame(pca$x[, 1:2])
+
+
+# Calculate the proportion of variance for PC1 and PC2
+variance_explained <- pca$sdev^2 / sum(pca$sdev^2)
+variance_pc1 <- variance_explained[1]*100
+variance_pc2 <- variance_explained[2]*100
+
+
+
+scores$Isolate <- rownames(scores)
+
+rownames(scores) <- NULL
+
+
+scores$var.pc1 <- variance_pc1
+scores$var.pc2 <- variance_pc2
+
+PCA.row.Iso_col.Abx.ISOpca <- scores
+
+
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_PCA_Iso.V.drug_ISOLATEpca_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+PCA.row.Iso_col.Abx.ISOpca %>%
+  ggplot(aes(x = PC1,
+             y = PC2)) +
+  geom_point(alpha = 0.25,
+             stroke = 0) +
+     theme(aspect.ratio = 1)+
+
+  theme_prism()+
+   theme(legend.position = "none")
+dev.off()
+
+```
+
+
+
+#6. Species Infromation
+```{r}
+
+Species.Info <- read.csv("/Users/Alex/Documents/PhD/PhD_project/PhD_project-Tolerance/R-ANALYSIS/Ranalysis_perwell/Ranalysis_perWell_TLKK/ASCT_Analysis_AJ_orginal/ASCT_EXPERIMENTS_v2-critical/ASCT.Ranalysis_Exp_Info/ASCT_Label_directory/ClinicalIsolates_LookUpMasterList_BWupdated.csv")
+
+Species.Info <- Species.Info%>%
+   mutate( Isolate = paste("Iso.",Sample_ID_Full,
+                         sep=""))%>%
+  mutate(Isolate = sub(" ","",Isolate))%>%
+  select(Isolate,
+         Subspecies)%>%
+  mutate(Isolate = if_else(Isolate == "Iso.ATCC","Iso.ATc.19979", Isolate ))
+
+```
+
+#7. Clinical Metadata 
+```{r}
+
+
+MD.df <- read.csv("/Users/Alex/Documents/PhD/PhD_project/PhD_project-Tolerance/R-ANALYSIS/Ranalysis_perwell/Ranalysis_perWell_TLKK/ASCT_Analysis_AJ_orginal/ASCT_EXPERIMENTS_v2-critical/ASCT.Ranalysis_Exp_Info/ASCT_Clinical_Metadata/ASCT_3_Clinical_Metadata_forAlex.csv")
+
+
+
+MD.df <- MD.df %>%
+    mutate(ClearedVSpersistant_ATS = as.numeric(ClearedVSpersistant_ATS))%>%
+   mutate(ClearedVSpersistant_ATS = if_else(ClearedVSpersistant_ATS == 2, "Persistant.Inf",
+                                     if_else(ClearedVSpersistant_ATS == 1, "Cleared.Inf" ,NA)))%>%
+    mutate(FEV1_clearPers = ifelse(FEV1_clearPers == "ND" | FEV1_clearPers == "", NA, as.numeric(FEV1_clearPers)))%>%
+
+  select(Isolate, 
+         ClearedVSpersistant_ATS,
+          FEV1_clearPers)%>%
+  mutate(Isolate = paste("Iso.", Isolate,sep=""))%>%
+    mutate(Isolate = sub(" ","",Isolate))%>%
+
+    mutate(Isolate = if_else(Isolate == "Iso.ATCC","Iso.ATc.19979", Isolate ))
+
+
+```
+
+## 7.1 Merging data
+```{r}
+
+PCA.row.Iso_col.Abx.ISOpca <- PCA.row.Iso_col.Abx.ISOpca %>%
+  left_join(MD.df, by = "Isolate")
+
+PCA.row.Iso_col.Abx.ISOpca <- PCA.row.Iso_col.Abx.ISOpca %>%
+  left_join(Species.Info , by = "Isolate")
+
+```
+
+
+```{r}
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_PCA_Iso.V.drug_ISOLATEpca-LabSpecies_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+PCA.row.Iso_col.Abx.ISOpca %>%
+  filter(Subspecies != "")%>%
+  ggplot(aes(x = PC1,
+             y = PC2, 
+             colour = Subspecies)) +
+  geom_point(alpha = 0.25,
+             stroke = 0) +
+     theme(aspect.ratio = 1)+
+
+  theme_prism()
+dev.off()
+```
+
+
+```{r}
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_PCA_Iso.V.drug_ISOLATEpca-LabOutcome_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+PCA.row.Iso_col.Abx.ISOpca %>%
+filter(!is.na(ClearedVSpersistant_ATS))%>%
+  ggplot(aes(x = PC1,
+             y = PC2, 
+             colour = ClearedVSpersistant_ATS)) +
+  geom_point(alpha = 0.25,
+             stroke = 0) +
+     theme(aspect.ratio = 1)+
+
+  theme_prism()
+dev.off()
+```
+
+#Houskeeping
+```{r}
+rm(comp,
+   pca,
+   scores,
+   PCA.row.Abx_col.Iso.CONDpca,
+   PCA.row.Abx_col.Iso.CONDpca.100present,
+   PCA.row.Iso_col.Abx.ISOpca)
+```
+
+#8. Correlation matrix based PCA
+```{r}
+# Applying correlation function
+Corr.matrix <- cor(KF.df.na.main.Iso,
+               use = "pairwise.complete.obs",
+               method ="pearson") # Default is pearsons correlation
+```
+
+##8.1 Visualizing correlation matrix
+```{r}
+# Visualizing correlation matrix
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_KF_PairedCorrMatrix_Drugs_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+ggcorrplot(Corr.matrix,
+           hc.order = TRUE, #logical value. If TRUE, correlation matrix will be hc.ordered using hclust function.
+           lab = TRUE,
+            lab_size = 0.8,    # Adjust the size of correlation coefficient labels
+  tl.cex = 4 ,# Adjust the size of variable names
+  title =  "Pairwise correlation matrix across all drugs",
+  legend.title = "Peasons corr.coeff"
+  )    
+dev.off()
+```
+
+
+
+ Remarks
+ - Clofazamins poorly correlates across the two CLO antibiotic concentrations.
+ - AZM, AMK, LZD ,TGC and MIN have a relatively strong correlation coefficient between each other. However, a poor correlation with IPM , FOX and CLO. A moderate/low coefficient is observed considering MXF
+
+
+##8.2 Applying PCA analysis on correlation matrix
+```{r}
+
+# Perform PCA
+pca <- prcomp(Corr.matrix, scale = TRUE)
+
+# Extract PCA scores
+scores <- as.data.frame(pca$x[, 1:2])
+
+
+# Calculate the proportion of variance for PC1 and PC2
+variance_explained <- pca$sdev^2 / sum(pca$sdev^2)
+variance_pc1 <- variance_explained[1]*100
+variance_pc2 <- variance_explained[2]*100
+
+
+scores$Abx.con <- Abx.list
+scores$var.pc1 <- variance_pc1
+scores$var.pc2 <- variance_pc2
+
+PCA.corr.Matrix <- scores
+
+library(stringr)
+PCA.corr.Matrix  <-PCA.corr.Matrix %>%
+  mutate(Abx = str_extract(Abx.con, "^[^.]+"))%>%
+  mutate(Abx = if_else(Abx == "IPMb", "IPM",
+                       if_else(Abx == "IPMc", "IPM",
+                               if_else(Abx == "MXFb", "MXF", Abx))))%>%
+mutate(Concentration = str_extract(Abx.con, "(?<=\\.).*"))
+
+
+
+
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_PCA_CorrMatrix_ConditionPCA_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+PCA.corr.Matrix %>%
+
+  ggplot(aes(x = PC1,
+             y = PC2,
+             colour = Abx,
+             label = Abx.con)) +
+  
+  geom_point(size = 1,
+             stroke = 0) +
+  geom_text(size = 1, color = "black", vjust = -0.5) +  # Adjust size and vjust
+     theme(aspect.ratio = 1)+
+   labs(x = paste("PC1 (", round(unique(PCA.corr.Matrix$var.pc1),3), "%)" ,sep=""),
+       y = paste("PC2 (", round(unique(PCA.corr.Matrix $var.pc2),3), "%)",sep=""),
+       title = "PCA of conditions using correlation matrix",
+       subtitle =  "Each colour represents an antibiotic",
+       colour = "Antibiotic") +
+    theme_prism()+
+   theme(legend.position = "none")+
+
+  theme(plot.caption = element_text(size = 3, margin = margin(t = 10, r = 10, b = 10, l = 10)))
+
+dev.off()
+
+
+
+```
+
+
+
+### Adding infomation on mechnaism of action 
+```{r}
+
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_PCA_CorrMatrix_ConditionPCA-mechanism_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+PCA.corr.Matrix %>%
+  mutate(Mechanism.of.action.target = if_else(Abx == "IPM" | Abx == "FOX", "Cell wall",
+                                              if_else(Abx == "MIN" | Abx == "AZM" | Abx == "AMK" | Abx == "TGC" | Abx == "LZD" , "RNA protein synthesis",
+                                                      if_else(Abx == "MXF", "DNA replication",
+                                                              if_else(Abx == "CLO", "Unknown" , "Unknown")))))%>%
+  ggplot(aes(x = PC1,
+             y = PC2,
+             colour = Mechanism.of.action.target,
+             label = Abx.con)) +
+  
+  geom_point(size = 1,
+             stroke = 0) +
+  geom_text(size = 1, color = "black", vjust = -0.5) +  # Adjust size and vjust
+     theme(aspect.ratio = 1)+
+   labs(x = paste("PC1 (", round(unique(PCA.corr.Matrix$var.pc1),3), "%)" ,sep=""),
+       y = paste("PC2 (", round(unique(PCA.corr.Matrix $var.pc2),3), "%)",sep=""),
+       title = "PCA of conditions using correlation matrix",
+       subtitle =  "Each colour represents a mechanism of action (MoA)",
+       caption =  "The mechnism(s) of action of clofazamine remains unclear. Some suggest it binds to bacterial DNA inhibiting replication while others belive its antimicrobial acrivity appears to be membrane directed.",
+       colour = "MoA") +
+  
+
+    theme_prism()+
+   theme(legend.position = "bottom")+
+
+  theme(plot.caption = element_text(size = 3, margin = margin(t = 10, r = 10, b = 10, l = 10)))
+
+dev.off()
+
+
+#Housekeeping
+rm(ggp1,
+   kmeans_clust,
+   pca,
+   pca_scores,
+   res.pca)
+```
+
+
+# 9. Correlation matrix PCA 
+```{r}
+library(data.table)
+library(FactoMineR)
+
+
+# Make Transpose this dataframe 
+Transposed.rowAbx.colIso <- transpose(KF.df.na.main.Iso)
+
+
+# get row and colnames in order
+colnames(Transposed.rowAbx.colIso) <- rownames(KF.df.na.main.Iso)
+rownames(Transposed.rowAbx.colIso) <- colnames(KF.df.na.main.Iso)
+
+
+# Applying correlation function
+Corr.matrix.colIso <- cor(Transposed.rowAbx.colIso,
+               use = "pairwise.complete.obs",
+               method ="pearson") # Default is pearsons correlation
+
+
+# Perform PCA
+pca.ISO <- prcomp(Corr.matrix.colIso , scale = TRUE)
+
+# Extract PCA scores
+scores <- as.data.frame(pca.ISO$x[,1:2])
+
+
+# Calculate the proportion of variance for PC1 and PC2
+variance_explained <- pca.ISO$sdev^2 / sum(pca.ISO$sdev^2)
+
+variance_pc1 <- variance_explained[1]*100
+variance_pc2 <- variance_explained[2]*100
+
+
+# PCA of isolate vs drugs ; 
+scores$Isolate <- names(Transposed.rowAbx.colIso)
+scores$var.pc1 <- variance_pc1
+scores$var.pc2 <- variance_pc2
+
+pca.ISO.corr.Matrix <- scores
+
+
+
+
+plot.name <- paste(exp.res.dir,"/PCA-analysis_Drug.V.Iso/","ASCT_PCA_CorrMatrix_IsoPCA_",formatted_date,".pdf", sep = "")
+
+pdf(plot.name)
+pca.ISO.corr.Matrix%>%
+
+  ggplot(aes(x = PC1,
+             y = PC2,
+             label = Isolate)) +
+  
+  geom_point(size = 1,
+             stroke = 0,
+             alpha = 0.20) +
+  geom_text(size = 1, color = "black", vjust = -0.5) +  # Adjust size and vjust
+     theme(aspect.ratio = 1)+
+   labs(x = paste("PC1 (", round(unique(pca.ISO.corr.Matrix$var.pc1),3), "%)" ,sep=""),
+       y = paste("PC2 (", round(unique(pca.ISO.corr.Matrix$var.pc2),3), "%)",sep=""),
+       title = "PCA of Iso using correlation matrix") +
+  
+
+    theme_prism()+
+   theme(legend.position = "none")+
+
+  theme(plot.caption = element_text(size = 3, margin = margin(t = 10, r = 10, b = 10, l = 10)))
+
+dev.off()
+```
+

@@ -1,0 +1,509 @@
+
+
+
+# Section 1: Defining variables
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+
+#Pop data variables
+
+cc.dir <- c("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCT/ASCT_EXPERIMENTS_v2-critical/ASCT.Ranalysis_Exp_Info/ASCT_CC")
+res.dir <- c(paste(genDir,
+                       "/",
+                       "Result_Fig",sep=""))
+
+wdDir <- genDir
+
+setwd(wdDir)
+
+# list the experiment directories to pull the tracking data
+setwd("..")
+
+mic.dir <- getwd()
+MIC.df <- read.csv(paste(mic.dir ,
+                 "/ASCT_Main_Data/",
+                 "MainPhenotypes_ASCTpaper.csv",
+                 sep=""))
+
+setwd(wdDir)
+# 
+list.of.drugs<- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+                    
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x",
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x",
+                  "ASCT.24_MXF10x"
+                                  )
+
+
+
+# EDIT the time scale axis that should be used 
+plot.xaxis.time.scale <- c(0,12,24,36,48,60,72)
+
+```
+
+# Section 2: Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+
+today <- format(Sys.Date(), "%Y%m%d")
+
+
+```
+
+## 2.1 Loop through Experimental Results
+```{r}
+
+
+expID <- list.of.drugs[12]
+Growth.df <- data.frame()
+
+
+for ( expID in list.of.drugs ) {
+  
+  Fitnorm <- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x"
+                                  )
+
+# Top2norm
+Top2norm <- c("ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x")
+  
+# Check if expID matches any element in Fitnorm or Top2norm
+if (expID %in% Fitnorm) {
+  fitting.or.Top2.norm <- "Fitnorm"
+} else if (expID %in% Top2norm) {
+  fitting.or.Top2.norm <- "Top2norm"
+} else {
+  fitting.or.Top2.norm <- "Not found"
+}
+
+  
+
+
+path.subdir <- paste("Experimental-Results",
+                     sep="")
+
+list.of.pop.data.Dir  <- paste(dirname(normalizePath(wdDir)),
+                                    "/",
+                                   expID,
+                               "/",
+                         path.subdir,
+                         "/",
+                         fitting.or.Top2.norm,
+                                    sep ="")
+
+list.of.pop.data.Dir  <- gsub("ASCT_Figures","ASCT_EXPERIMENTS_v2-critical",list.of.pop.data.Dir)
+  
+  # Load KF.intermediary table
+      Growth.files <- list.files(list.of.pop.data.Dir, pattern = "_GrowthEval_ROCbased.csv", full.names = TRUE)
+
+
+          Growth.df.sub <- read.csv(Growth.files)
+          
+                 Growth.df.sub <- Growth.df.sub %>%
+                   mutate(Abx.con = sub(".*_", "", expID))
+
+  Growth.df <- rbind(  Growth.df ,
+                           Growth.df.sub)
+
+  
+    
+    
+}
+
+```
+
+
+```{r}
+
+Growth.df.melted <- melt(   Growth.df , id.vars = c("ExpFile",
+                                                                      "Well_coordinate",
+                                                    "Abx.con",
+                                                    "Min.Ratio_n.SC_corr.None",
+                                                    "Max.R_TotArea_corr.nSCVS"),
+                                variable.name = "Feature")
+
+rm(Growth.df,
+   Growth.df.sub)
+
+
+
+
+```
+
+# Load CC file and find which out Well coordinate to isolate
+```{r}
+CC.files <- list.files(cc.dir, pattern = "_CC.csv", full.names = FALSE)
+
+
+
+#---
+# Set your working directory
+setwd(cc.dir)
+
+# Get a list of CSV files in the directory
+
+# Initialize an empty dataframe to store the combined data
+  CC.df <- data.frame()
+#file <- CC.files[1]
+# Loop through each file, read it into R, and combine it with the existing dataframe
+for (file in CC.files ) {
+  setwd(cc.dir)
+  file_path <- file.path(getwd(), file)
+  setwd(cc.dir)
+  data <- read.csv(file_path)
+  
+  data <- data %>%
+    mutate(ExpFile = file_path)%>%
+    mutate(ExpFile = gsub("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCT/ASCT_EXPERIMENTS_v2-critical/ASCT.Ranalysis_Exp_Info/ASCT_CC/","",ExpFile))%>%
+    mutate(ExpFile = gsub("_CC.csv","",ExpFile))
+  
+   CC.df <- rbind(  CC.df, data)
+}
+
+ 
+  CC.df <- separate(CC.df, col = Condition,
+                      into = c("Abx",
+                               "Concentration",
+                               "Isolate"),
+                      sep="_")
+```
+
+
+```{r}
+Growth.df.melted <- left_join(Growth.df.melted,
+                              CC.df, 
+                              by = c("ExpFile",
+                                     "Well_coordinate"))
+
+Growth.df.melted <- Growth.df.melted %>%
+  mutate(Feature = gsub(".Growth.Eval", "", Feature))
+
+sort(unique(Growth.df.melted$ExpFile))
+
+
+Growth.df.melted <- Growth.df.melted %>%
+  mutate(Feature = gsub(".Growth.Eval", "", Feature))%>%
+  mutate(Isolate = gsub("Iso.","",Isolate))%>%
+  mutate(ExpFile.Feature = paste(ExpFile,
+                                 Feature,
+                                 sep="_"))
+
+sort(unique(Growth.df.melted$ExpFile.Feature))
+
+rm(data)
+  
+Growth.df.melted <- Growth.df.melted %>%
+  filter(Feature == "Manual")
+
+```
+
+
+
+## Load MIC data
+###  Data wrangling of MIC data to match ASCT data structure
+```{r}
+
+# Isolate names have to match ( for merging)
+
+MIC.df <-  MIC.df %>%
+  select(contains("Isolate"), contains("MIC_lg2"))
+
+MIC.df.melted <- melt(   MIC.df , id.vars = c("Isolate"),
+                                variable.name = "Abx",
+                         value.name =  "MIC")
+
+rm(MIC.df)
+
+MIC.df.melted <- MIC.df.melted %>%
+  mutate(Abx = gsub("_MIC_lg2","", Abx))
+
+
+
+
+```
+
+
+# Renaming isolate vairbale according to Main ASCT data table
+```{r}
+# All OM isolates have to have their names changes. OM = 10 000 so 10 000 + whatever Isolate number
+TKC.om.df <- Growth.df.melted %>%
+  filter(grepl("OM", Isolate))%>%
+  mutate(Isolate = gsub("OM","",Isolate))%>%
+  mutate(Isolate = as.numeric(Isolate))%>%
+  mutate(Isolate = Isolate + 10000)%>%
+  mutate(Isolate = as.character(Isolate))
+
+# Lab strain has to be changed to ATCC
+TKC.ATc.df <- Growth.df.melted %>%
+  filter(Isolate == "ATc.19979")%>%
+  mutate(Isolate ="ATCC")
+
+
+TKC.df.sub <-Growth.df.melted%>%
+  filter(!grepl("OM", Isolate))%>%
+  filter(Isolate != "ATc.19979")
+
+
+TKC.updated.df <- rbind(TKC.df.sub,
+                       TKC.ATc.df )
+
+TKC.updated.df <-rbind(TKC.updated.df,
+                       TKC.om.df)
+
+Growth.MIC.df <- TKC.updated.df
+
+rm(TKC.ATc.df,
+   TKC.df.sub,
+   TKC.om.df,
+   TKC.updated.df,
+   Growth.df.melted,
+   MIC.df)
+```
+
+
+```{r}
+Growth.azmEarly <- Growth.MIC.df %>%
+  filter(Abx == "AZM")%>%
+  mutate(Abx = "AZMearly")
+
+Growth.azmLate <- Growth.MIC.df %>%
+  filter(Abx == "AZM")%>%
+  mutate(Abx= "AZMlate")
+
+
+Growth.AZM.df <- rbind(Growth.azmEarly,
+                       Growth.azmLate)
+
+
+Growth.AZM.df <- left_join(Growth.AZM.df,
+                           MIC.df.melted,
+                           by = c("Abx",
+                                  "Isolate"))
+rm(Growth.azmLate,
+   Growth.azmEarly)
+
+
+Growth.AZM.df <-Growth.AZM.df %>%
+  mutate(MIC = as.numeric(MIC))
+```
+
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggforce)
+library(ggpubr)
+library(wesanderson)
+
+plot.path <- paste(res.dir, "/ASCTgroweval_AZM.growth.def_MIC_NAs.incl", format(Sys.Date(), "%Y%m%d"), ".pdf", sep = "")
+
+# Define the specific MIC values and their corresponding colors
+MIC_values <- seq(-2, 10, by = 2)  # MIC values from -2 to 10 in intervals of 2
+
+# Create a custom color gradient from green-blue to yellow to red
+custom_gradient <- colorRampPalette(c("#43AA8B",
+                                      "yellow",
+                                      "red"))
+
+# Create a named vector for the colors, mapping each MIC value to a color
+MIC_colors <- setNames(custom_gradient(length(MIC_values)), MIC_values)
+
+gg <- Growth.AZM.df %>%
+  mutate(minRatio.SingleCell.Density = Min.Ratio_n.SC_corr.None,
+         maxRatio.TotArea_correction.nSCVS = Max.R_TotArea_corr.nSCVS,
+         MIC_factor = factor(MIC, levels = MIC_values)) %>%  # Ensure MIC is a factor with specified levels
+  ggplot(aes(
+    y = minRatio.SingleCell.Density,
+    x = maxRatio.TotArea_correction.nSCVS,
+    color = MIC_factor,  # Use the MIC_factor for color
+    group = ExpFile.Feature,
+    label = Isolate)) + 
+
+  geom_point(shape = 20,
+             size = 1, 
+             stroke = 0,
+             alpha = 1) +  # Increased alpha for better visibility
+
+  scale_color_manual(values = MIC_colors, na.value = "grey", name = "log2 MIC") +  # Custom color gradient with grey for NA
+
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", size = 0.3, alpha = 0.5) +
+
+  scale_x_continuous(limits = c(0, 2), breaks = seq(0, 3, by = 0.5)) +
+  scale_y_continuous(limits = c(-2, 0), breaks = seq(-2, 0, by = 0.5)) +
+
+  theme_pubr() +
+  theme(plot.title = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        strip.background = element_rect(fill = "white",
+                                        color = "white"), # White background and no border
+        axis.text.y = element_text(size = 7),
+        legend.text = element_text(size = 10),  # Increase legend text size
+        legend.title = element_text(size = 12),  # Increase legend title size
+        legend.key.size = unit(0.8, "lines"),  # Increase size of legend keys
+        plot.caption = element_text(hjust = 0, vjust = 1, size = 8, margin = margin(t = 10)),
+        legend.position = "top") +
+  theme(aspect.ratio = 1) +
+
+  facet_wrap_paginate(~ ExpFile + Abx.con + Abx,
+                      ncol = 2,
+                      nrow = 2,
+                      page = 1)
+
+n <- n_pages(gg)
+
+pdf(plot.path, paper = "a4", width = 20, height = 15)
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(~ ExpFile + Abx.con + Abx,
+                      ncol = 2,
+                      nrow = 2,
+                      page = i))
+}
+dev.off()
+
+rm(gg)
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggforce)
+library(ggpubr)
+library(wesanderson)
+
+plot.path <- paste(res.dir, "/ASCTgroweval_AZM.growth.def_MIC_NAs.removed", format(Sys.Date(), "%Y%m%d"), ".pdf", sep = "")
+
+# Define the specific MIC values and their corresponding colors
+MIC_values <- seq(-2, 10, by = 2)  # MIC values from -2 to 10 in intervals of 2
+
+# Create a custom color gradient from green-blue to yellow to red
+custom_gradient <- colorRampPalette(c("#43AA8B",
+                                      "yellow",
+                                      "red"))
+
+# Create a named vector for the colors, mapping each MIC value to a color
+MIC_colors <- setNames(custom_gradient(length(MIC_values)), MIC_values)
+
+Growth.AZM.df.NAs.removed <- Growth.AZM.df %>%
+  ungroup()%>%
+  drop_na()%>%
+  mutate(minRatio.SingleCell.Density = Min.Ratio_n.SC_corr.None,
+         maxRatio.TotArea_correction.nSCVS = Max.R_TotArea_corr.nSCVS,
+         MIC_factor = factor(MIC, levels = MIC_values)) %>% # Ensure MIC is a factor with specified levels
+drop_na()
+
+gg <- Growth.AZM.df.NAs.removed %>%
+  
+  ggplot(aes(
+    y = minRatio.SingleCell.Density,
+    x = maxRatio.TotArea_correction.nSCVS,
+    color = MIC_factor,  # Use the MIC_factor for color
+    group = ExpFile.Feature,
+    label = Isolate)) + 
+
+  geom_point(shape = 20,
+             size = 1, 
+             stroke = 0,
+             alpha = 1) +  # Increased alpha for better visibility
+
+  scale_color_manual(values = MIC_colors, name = "log2 MIC") +  # Custom color gradient with grey for NA
+
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "black", size = 0.3, alpha = 0.5) +
+
+  scale_x_continuous(limits = c(0, 2), breaks = seq(0, 3, by = 0.5)) +
+  scale_y_continuous(limits = c(-2, 0), breaks = seq(-2, 0, by = 0.5)) +
+
+  theme_pubr() +
+  theme(plot.title = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        strip.background = element_rect(fill = "white",
+                                        color = "white"), # White background and no border
+        axis.text.y = element_text(size = 7),
+        legend.text = element_text(size = 10),  # Increase legend text size
+        legend.title = element_text(size = 12),  # Increase legend title size
+        legend.key.size = unit(0.8, "lines"),  # Increase size of legend keys
+        plot.caption = element_text(hjust = 0, vjust = 1, size = 8, margin = margin(t = 10)),
+        legend.position = "top") +
+  theme(aspect.ratio = 1) +
+
+  facet_wrap_paginate(~ ExpFile + Abx.con + Abx,
+                      ncol = 2,
+                      nrow = 2,
+                      page = 1)
+
+n <- n_pages(gg)
+
+pdf(plot.path, paper = "a4", width = 20, height = 15)
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(~ ExpFile + Abx.con + Abx,
+                      ncol = 2,
+                      nrow = 2,
+                      page = i))
+}
+dev.off()
+
+rm(gg)
+
+```
+

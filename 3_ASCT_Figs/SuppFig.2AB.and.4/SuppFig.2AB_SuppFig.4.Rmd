@@ -1,0 +1,1480 @@
+---
+title: "ASCT_check_MAB_associations"
+output: html_document
+date: "2024-10-15"
+---
+
+# 1. Set directories
+```{r}
+
+info.wd <- getwd()
+
+info.resDir <- paste(info.wd,
+                     "/Fig_results/",
+                     sep="")
+
+
+info.dataDir <- c("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCTmtb/ASCTmtb_EXPERIMENTS/ASCTmtb_OverviewAssociations_perWell/Experimental-Results/ALLdata_MTB_resultstable_perWell.fitting_20241017_LB.csv") 
+
+
+
+```
+# 2. Load libraries
+```{r}
+
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels)
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+library(readxl)
+library(rstatix)
+library(ggExtra)
+
+
+library(grid)  # Load the grid package allows you to add text to pages in ggplot
+library(coin)
+```
+
+# 3. Load main data
+```{r}
+Main.df <- read.csv(info.dataDir)
+
+
+
+MTB <- Main.df %>%
+  select( RMM.2021,
+          BMM.2021,
+          BMM.BHeB.2021,
+          Clinical.2022,
+         matches("AUC.0.168h_"),
+          matches("lg2."))
+
+```
+
+
+# 3.1 Select key variables and perform mann whitney U test
+```{r}
+
+list.of.variables <- names(MTB)
+
+list.of.outcomes <- c("RMM.2021",
+                      "BMM.2021",
+                      "BMM.BHeB.2021",
+                      "Clinical.2022")
+
+
+
+list.of.variables <- setdiff(list.of.variables, list.of.outcomes)
+list.of.variables <- c(
+  "lg2.min.MIC.ug.ml..d14_Iso.H37Ra",
+  "lg2.median.MIC.ug.ml..d14_Iso.H37Ra",
+  "lg2.mean.MIC.ug.ml..d14_Iso.H37Ra",
+  "lg2.min.MIC.ug.ml..d14_Iso.mc27000",
+                       "lg2.median.MIC.ug.ml..d14_Iso.mc27000",
+                       "lg2.mean.MIC.ug.ml..d14_Iso.mc27000" )
+
+
+var <- list.of.variables[1]
+outcome <- list.of.outcomes[1]
+MTB.stats <- data.frame()
+
+
+for ( outcome in list.of.outcomes ) {
+  
+  
+  for ( var in list.of.variables ) {
+  
+    
+    if ( outcome ==   "Clinical.2022") {
+       # Statistical test RMM2021
+  MTB.sub <- MTB %>%
+    select(outcome,
+           var)%>%
+    drop_na()%>%
+  filter_all(all_vars(. != "ND")) %>%
+  filter_all(all_vars(. != "C2-")) %>%
+ mutate(
+    across(all_of(outcome), as.factor),  # Convert outcome column to factor
+    across(all_of(var), as.numeric)      # Ensure var column is numeric
+  )
+  
+  # Apply the Wilcoxon test with dynamically created formula
+test_result <- coin::wilcox_test(as.formula(paste(var, "~", outcome)), data = MTB.sub, 
+                                 distribution = "exact")
+
+#extracting p values
+p_value <- pvalue(test_result)
+MTB.stats.sub <- data.frame(
+  Metric = var,
+  In.vivo.outcome =outcome ,
+  Stat.test = "mwu.test",
+  p = p_value)
+  
+   MTB.sub.export <- MTB %>%
+    select(outcome,
+           var)%>%
+    drop_na()%>%
+  filter_all(all_vars(. != "ND")) %>%
+  filter_all(all_vars(. != "C2-"))
+   
+    write.csv(  MTB.sub.export,
+              paste(info.resDir,
+                    "/Intermediary_Files_AJ/",
+                    "R.mwu_AJcoin_",
+                    var,
+                    "_",
+                    outcome,
+                    ".csv",sep=""),
+              row.names = FALSE)
+  
+      
+    } else {
+         # Statistical test RMM2021
+  MTB.sub <- MTB %>%
+    select(outcome,
+           var)%>%
+      drop_na()%>%
+    filter_all(all_vars(. != "ND")) %>%
+    mutate(
+    across(all_of(outcome), as.factor),  # Convert outcome column to factor
+    across(all_of(var), as.numeric)      # Ensure var column is numeric
+  )
+  # Apply the Wilcoxon test
+
+# Apply the Wilcoxon test with dynamically created formula
+test_result <- coin::wilcox_test(as.formula(paste(var, "~", outcome)), data = MTB.sub, 
+                                 distribution = "exact")
+#extracting p values
+p_value <- pvalue(test_result)
+
+MTB.stats.sub <- data.frame(
+  Metric = var,
+  In.vivo.outcome =outcome ,
+  Stat.test = "mwu.test",
+  p = p_value)
+
+
+  MTB.sub.export <- MTB %>%
+    select(outcome,
+           var)%>%
+      drop_na()%>%
+filter_all(all_vars(. != "ND")) 
+  
+  write.csv(  MTB.sub.export,
+              paste(info.resDir,
+                    "/Intermediary_Files_AJ/",
+                    "R.mwu_AJcoin_",
+                    var,
+                    "_",
+                    outcome,
+                    ".csv",sep=""),
+              row.names = FALSE)
+      
+    }
+
+  
+  
+  MTB.stats <- rbind(MTB.stats,
+                            MTB.stats.sub)
+  
+  
+                 
+}
+}
+
+# Get the current date and time in YYYYMMDD_HH format
+current_date_time <- format(Sys.time(), "%Y%m%d_%H")
+
+rm(MTB.sub)
+```
+
+# 5. Export result table
+```{r}
+
+
+write.csv(MTB.stats , 
+          paste(info.resDir,"ASCT_MTBassociation_mwu.statistics_",current_date_time,"_AJmicdata_coin.csv",sep=""), row.names = FALSE)
+
+MTB.stats.wide <- MTB.stats 
+
+
+
+MTB.stats.wide <- MTB.stats.wide %>%
+  pivot_wider(
+    names_from = In.vivo.outcome,      # Use `.y.` to create new column names
+    values_from = p        # Spread values from `p` across those new columns
+  )
+
+
+write.csv(MTB.stats.wide , 
+          paste(info.resDir,"ASCT_MTBassociation_mwu.statistics_",current_date_time,"_WIDE_AJmicdata_coin.csv",sep=""), row.names = FALSE)
+
+```
+
+# Supplementary Figure 2
+## Assciation with and without distinct drug combinaitons
+### With Ethambutol, Isoniazid, Rifampicin, Bedaquiline,Pretomanid, Clofazimine
+```{r}
+list.of.distinct.drugs <- c(
+  "E",#Ethambutol
+     "H",#Isoniazid
+     "R",#Rifampicin
+     "B", #Bedaquiline
+     "Pa",#Pretomanid
+     "C", #Clofazimine
+     "Su",#Sutezolid
+     "P",#Refapentin
+     "Z", # Pyrazinamid
+     "M",#Moxifloxacin 
+     "Sq",#SQ109
+     "D",#Delamanid
+     "L"#Linezolid
+     )
+
+list.of.all.drugs <- unique(Main.df$Drug)
+
+MTB.select <- Main.df %>%
+  select(Drug,
+           matches("AUC.0.168h_"))
+
+
+list.of.variables <- setdiff(names(MTB.select), "Drug")
+list.of.AUC.variables <- names(MTB.select)[grepl("AUC.0.168", names(MTB.select))]
+
+str(MTB.select)
+
+# 
+ auc.var <-list.of.AUC.variables[3]
+distinct.drug <- list.of.distinct.drugs[6] # P
+
+#----
+MTB.select.stats <- data.frame()
+MTB.select.growing.IntermedRes <- data.frame()
+MTB.select.starved.IntermedRes <- data.frame()
+
+
+# Iterate through list of distinct drugs
+for ( distinct.drug in list.of.distinct.drugs) {
+  if (distinct.drug == "P") {
+  MTB.select.sub <- MTB.select %>%
+    mutate(Split_drugs = gsub("([A-Z])", "_\\1", Drug) %>% gsub("^_", "", .)) %>%
+    mutate(With_withoutDrug = ifelse(grepl(paste("_", distinct.drug, "_", sep = ""), Split_drugs),
+                                     distinct.drug,
+                                     paste("no ", distinct.drug, sep = ""))) %>%
+    select(Drug, With_withoutDrug, everything())
+  
+} else if (distinct.drug == "Pa") {
+  MTB.select.sub <- MTB.select %>%
+    mutate(Split_drugs = gsub("([A-Z])", "_\\1", Drug) %>% gsub("^_", "", .)) %>%
+    mutate(With_withoutDrug = ifelse(grepl(paste("_", distinct.drug, "_", sep = ""), Split_drugs),
+                                     distinct.drug,
+                                     paste("no ", distinct.drug, sep = ""))) %>%
+    select(Drug, With_withoutDrug, everything())
+  
+} else {
+  MTB.select.sub <- MTB.select %>%
+    mutate(With_withoutDrug = ifelse(grepl(distinct.drug, Drug),
+                                     distinct.drug,
+                                     paste("no ", distinct.drug, sep = ""))) %>%
+    select(Drug, With_withoutDrug, everything())
+}
+      
+      
+  MTB.select.sub <-     MTB.select.sub  %>%
+  pivot_longer(
+    cols = starts_with("AUC.0.168h_Iso."),
+    names_to = "AUC_Isolate",
+    values_to = "value"
+  ) %>%
+  drop_na()
+  # iterate through list of variables for the associatiosn e.g AUC.0.168h_Iso.mc27000pbs
+## Average of mc27000 and H37Ra | and average of mc27000pbs mc27000pan H37Rapbs
+
+
+      MTB.select.sub.ExpoGrowing.intermedRes <-   MTB.select.sub %>%
+        filter(AUC_Isolate ==  "AUC.0.168h_Iso.mc27000" | AUC_Isolate == "AUC.0.168h_Iso.H37Ra" )%>% # These were the strains used in the paper
+        ungroup()%>%
+        group_by(Drug)%>%
+        mutate(mean_AUC_ExpoGrowth = mean(value))%>%
+                ungroup()%>%
+        select(With_withoutDrug,
+               mean_AUC_ExpoGrowth)%>%
+          ungroup()%>%
+        distinct()%>%
+        mutate(Drug = distinct.drug)
+      
+   MTB.select.growing.IntermedRes <- rbind( MTB.select.growing.IntermedRes,   MTB.select.sub.ExpoGrowing.intermedRes)
+   
+   
+      MTB.select.sub.ExpoGrowing <-   MTB.select.sub %>%
+        filter(AUC_Isolate ==  "AUC.0.168h_Iso.mc27000" | AUC_Isolate == "AUC.0.168h_Iso.H37Ra" )%>% # These were the strains used in the paper
+        ungroup()%>%
+        group_by(Drug)%>%
+        mutate(mean_AUC_ExpoGrowth = mean(value))%>%
+                ungroup()%>%
+        select(With_withoutDrug,
+               mean_AUC_ExpoGrowth)%>%
+        ungroup()%>%
+        distinct()%>%
+           wilcox_test(
+      formula = as.formula(paste( "mean_AUC_ExpoGrowth~ With_withoutDrug")),
+           exact = TRUE)%>%
+            select(-statistic)%>%
+    mutate(Stat.test = "Mann.Whitney")%>%
+    mutate(Drug.in.question = distinct.drug)%>%
+        select(Drug.in.question,
+               everything())
+      
+      # ------ Starved strain
+       
+      MTB.select.sub.Starved.intermedRes <-   MTB.select.sub %>%
+       filter(AUC_Isolate ==  "AUC.0.168h_Iso.mc27000pbsStrvd" |
+               AUC_Isolate == "AUC.0.168h_Iso.mc27000panStrvd2"    |
+            AUC_Isolate == "AUC.0.168h_Iso.H37RapbsStrvd" 
+             )%>% # These were the strains used in the paper
+        ungroup()%>%
+        group_by(Drug)%>%
+        mutate(mean_AUC_Starved = mean(value))%>%
+        ungroup()%>%
+        select(With_withoutDrug,
+               mean_AUC_Starved)%>%
+        distinct()%>%
+        mutate(Drug = distinct.drug)
+      
+      write.csv(       
+      MTB.select.sub.Starved.intermedRes,
+                paste("Intermediaty_Check_fig2/Starved_AUC_",
+                      distinct.drug,".csv",sep=""),
+      row.names = FALSE)
+         
+            MTB.select.starved.IntermedRes  <- rbind(MTB.select.starved.IntermedRes ,
+                                                MTB.select.sub.Starved.intermedRes)
+
+         
+         #... Statistical mwu Test
+      
+         MTB.select.sub.Starved <-   MTB.select.sub %>%
+       filter(AUC_Isolate ==  "AUC.0.168h_Iso.mc27000pbsStrvd" |
+               AUC_Isolate == "AUC.0.168h_Iso.mc27000panStrvd2"    |
+            AUC_Isolate == "AUC.0.168h_Iso.H37RapbsStrvd" 
+             )%>% # These were the strains used in the paper
+        ungroup()%>%
+        group_by(Drug)%>%
+        mutate(mean_AUC_Starved = mean(value))%>%
+                   ungroup()%>%
+        select(With_withoutDrug,
+               mean_AUC_Starved)%>%
+
+  distinct()%>%
+    wilcox_test(
+      formula = as.formula(paste( "mean_AUC_Starved ~ With_withoutDrug")),
+
+       exact = TRUE
+      
+      )%>%
+    select(-statistic)%>%
+    mutate(Stat.test = "Mann.Whitney")%>%
+    mutate(Drug.in.question = distinct.drug)%>%
+        select(Drug.in.question,
+               everything())
+      
+      MTB.select.stats <- rbind(MTB.select.stats,         MTB.select.sub.ExpoGrowing)
+        MTB.select.stats <- rbind(MTB.select.stats,         MTB.select.sub.Starved )
+
+      rm(MTB.select.sub.ExpoGrowing,
+         MTB.select.sub.Starved)
+    
+  
+}
+      MTB.select.stats <-      MTB.select.stats %>%
+   mutate(Drug.name= if_else(Drug.in.question == "E", "Ethambutol",
+                             if_else(Drug.in.question == "H", "Isoniazid",
+                   if_else(Drug.in.question == "R", "Rifampicin",
+    if_else(Drug.in.question == "B", "Bedaquiline",
+    if_else(Drug.in.question == "Pa", "Pretomanid",
+    if_else(Drug.in.question == "C", "Clofazimine",
+            if_else(Drug.in.question == "Su", "Sutezolid",
+                    if_else(Drug.in.question == "P", "Rifapentin",
+                            if_else(Drug.in.question == "Z","Pyrazinamid" ,
+                                    if_else(Drug.in.question == "M","Moxifloxacin" ,
+                                            if_else(Drug.in.question =="Sq", "Q109",
+                                                    if_else(Drug.in.question == "D","Delamanid",
+                                                           if_else(Drug.in.question == "L", "Linezolid", "Unkown") )))))))))))))
+      rm(MTB.select.sub,
+         MTB.select.sub.ExpoGrowing.intermedRes,
+         MTB.select.sub.Starved.intermedRes)
+```
+
+# ggplotsupp fig 2
+```{r}
+MTB.select.starved.IntermedRes <- melt(MTB.select.starved.IntermedRes)
+      MTB.select.growing.IntermedRes <- melt(      MTB.select.growing.IntermedRes)
+MTB.select.both.Intermed  <- rbind(MTB.select.starved.IntermedRes ,
+                                         MTB.select.growing.IntermedRes)
+
+
+
+rm(MTB.select.starved.IntermedRes,
+   MTB.select.growing.IntermedRes)
+
+Label.of.drugs <- MTB.select.stats %>%
+  select(Drug.in.question,
+         Drug.name)%>%
+  distinct()%>%
+  mutate(Drug = Drug.in.question)%>%
+  select(-Drug.in.question)
+
+MTB.select.both.Intermed  <- left_join(MTB.select.both.Intermed ,
+                                       Label.of.drugs)
+
+MTB.select.both.Intermed  <-MTB.select.both.Intermed %>%
+ mutate(With_withoutDrug2 = if_else(str_detect(With_withoutDrug, "no"), 
+                                     paste("No", Drug.name, sep = " "), 
+                                     Drug.name))
+
+unique(MTB.select.both.Intermed$variable)
+
+# Adding infromaiton on statistics
+MTB.pval.select <- MTB.select.stats %>%
+  select(Drug.in.question,
+         .y.,
+         p)%>%
+  mutate(Drug = Drug.in.question,
+         variable = .y.)%>%
+  select(Drug,
+         variable,
+         p) %>%
+  mutate(   p.value = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)) ) # Apply conditions
+
+MTB.select.both.Intermed <- left_join(MTB.select.both.Intermed ,
+                                      MTB.pval.select )
+library(forcats)
+
+
+MTB.select.both.Intermed %>%
+  
+  filter(variable == "mean_AUC_Starved")%>%
+  mutate(With_withoutDrug2 = fct_relevel(With_withoutDrug2, 
+                                         sort(unique(With_withoutDrug2[!str_detect(With_withoutDrug2, "No")])), 
+                                         after = 0)) %>% # Places "No" values second
+ggplot( aes(x = With_withoutDrug2, 
+            y = value, 
+            fill =variable)) +
+        geom_boxplot(outlier.shape = NA, alpha = 0.8, size = 0.2) +
+           
+      
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+      
+      
+        geom_jitter(color = "black", size = 0.1, alpha = 1, shape = 20, position = position_jitter(seed = 1, width = 0.3, height = 0)) +
+               
+  
+    scale_fill_manual(values = c("mean_AUC_Starved" = "darkgreen", 
+                               "mean_AUC_ExpoGrowth" = "purple4")) +
+  # Apply the  y-axis limits
+   scale_y_continuous(limits = c(0.65, 0.95), breaks = seq(0.65, 0.95, by = 0.05)) +
+
+
+        labs(
+          x = "",
+          y = "" ) +
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+               axis.text.x = element_text(size = 4, angle = 90, hjust = 1),
+
+          axis.text.y = element_text(size = 4),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()
+        ) +
+
+       facet_grid( variable ~Drug.name + p.value,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+
+
+ 
+
+```
+
+```{r}
+# Create the plot and assign it to a variable
+plot_Supp_Fig_2a <- MTB.select.both.Intermed %>%
+  filter(variable == "mean_AUC_Starved") %>%
+  mutate(With_withoutDrug2 = fct_relevel(With_withoutDrug2, 
+                                         sort(unique(With_withoutDrug2[!str_detect(With_withoutDrug2, "No")])), 
+                                         after = 0)) %>%  # Places "No" values second
+  ggplot(aes(x = With_withoutDrug2, 
+             y = value, 
+             fill = variable)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8, size = 0.2) +
+  
+  # Adding error bars at the ends of the quartile range
+  stat_boxplot(geom = "errorbar", width = 0.1, size = 0.1) +
+  
+  geom_jitter(color = "black", size = 0.1, alpha = 1, shape = 20, 
+              position = position_jitter(seed = 1, width = 0.3, height = 0)) +
+  
+  scale_fill_manual(values = c("mean_AUC_Starved" = "darkgreen", 
+                               "mean_AUC_ExpoGrowth" = "purple4")) +
+  
+  # Apply the y-axis limits
+  scale_y_continuous(limits = c(0.65, 0.95), breaks = seq(0.65, 0.95, by = 0.05)) +
+  
+  labs(x = "", y = "") +
+  
+  theme_prism(base_line_size = 0.2) +
+  theme(
+    strip.background = element_blank(),
+    panel.border = element_blank(),
+    legend.position = "none",
+    strip.placement = "outside",
+    aspect.ratio = 1,
+    strip.text = element_text(size = 3),
+    axis.text.x = element_text(size = 4, angle = 90, hjust = 1),
+    axis.text.y = element_text(size = 4),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text = element_blank()
+  ) +
+  
+  facet_grid(variable ~ Drug.name + p.value, scales = "free_x", switch = "y", 
+             labeller = labeller(.cols = label_wrap_gen(width = 100)))
+
+# Save the plot as PDF on A4 size
+ggsave("Supp.Fig.2b.pdf", plot = plot_Supp_Fig_2a, width = 8.27, height = 11.69, units = "in")
+
+```
+
+```{r}
+# Create the plot and assign it to a variable
+plot_Supp_Fig_2b <- MTB.select.both.Intermed %>%
+  filter(variable ==  "mean_AUC_ExpoGrowth") %>%
+  mutate(With_withoutDrug2 = fct_relevel(With_withoutDrug2, 
+                                         sort(unique(With_withoutDrug2[!str_detect(With_withoutDrug2, "No")])), 
+                                         after = 0)) %>%  # Places "No" values second
+  ggplot(aes(x = With_withoutDrug2, 
+             y = value, 
+             fill = variable)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8, size = 0.2) +
+  
+  # Adding error bars at the ends of the quartile range
+  stat_boxplot(geom = "errorbar", width = 0.1, size = 0.1) +
+  
+  geom_jitter(color = "black", size = 0.1, alpha = 1, shape = 20, 
+              position = position_jitter(seed = 1, width = 0.3, height = 0)) +
+  
+  scale_fill_manual(values = c("mean_AUC_Starved" = "darkgreen", 
+                               "mean_AUC_ExpoGrowth" = "purple4")) +
+  
+  # Apply the y-axis limits
+  scale_y_continuous(limits = c(0.65, 0.95), breaks = seq(0.65, 0.95, by = 0.05)) +
+  
+  labs(x = "", y = "") +
+  
+  theme_prism(base_line_size = 0.2) +
+  theme(
+    strip.background = element_blank(),
+    panel.border = element_blank(),
+    legend.position = "none",
+    strip.placement = "outside",
+    aspect.ratio = 1,
+    strip.text = element_text(size = 3),
+    axis.text.x = element_text(size = 4, angle = 90, hjust = 1),
+    axis.text.y = element_text(size = 4),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text = element_blank()
+  ) +
+  
+  facet_grid(variable ~ Drug.name + p.value, scales = "free_x", switch = "y", 
+             labeller = labeller(.cols = label_wrap_gen(width = 100)))
+
+# Save the plot as PDF on A4 size
+ggsave("Supp.Fig.2a.pdf", plot = plot_Supp_Fig_2b, width = 8.27, height = 11.69, units = "in")
+
+```
+
+```{r}
+ rm(
+    MTB.select,
+    plot_Supp_Fig_2b,
+    plot_Supp_Fig_2a,
+    MTB.stats.wide,
+    MTB.select.stats, 
+    MTB.pval.select,
+    MTB.select.both.Intermed)
+```
+
+# Supplementary Fig 4
+# Plot Box plots  of e.g. min MIC of H37Ra (y) vs SOC and Better than SOC with association scores 
+```{r}
+MTB.mic <- Main.df %>%
+  select(Drug,
+         RMM.2021,
+         BMM.2021,
+         BMM.BHeB.2021,
+         Clinical.2022,
+          matches("lg2."))
+# Please in this step only process Iso.mc27000
+list.of.Isolates <- c("Iso.mc27000")
+
+list.of.models <- c("RMM.2021",
+                    "BMM.2021",
+                    "BMM.BHeB.2021",
+                    "Clinical.2022" )
+
+mod <- list.of.models[1]
+iso <- list.of.Isolates[1]
+
+list.of.calculations <- c("min",
+                    "mean*",
+                    "median")
+
+calc <- list.of.calculations[1]
+gg.plot.list <- list()
+```
+
+## building gg.plot list for Iso.mc27000
+```{r}
+for ( iso in list.of.Isolates ) {
+  
+  MTB.mic.sub <- MTB.mic %>%
+    select(Drug,
+           RMM.2021,
+           BMM.2021,
+           BMM.BHeB.2021,
+           Clinical.2022,
+           matches(iso))
+  
+  for( calc in list.of.calculations ) {
+    
+    # Relapsing Mouse model 2021
+    
+      MTB.mic.sub.RMM <-  MTB.mic.sub %>%
+        select(Drug,
+               RMM.2021,
+               matches(calc))%>%
+        drop_na()%>%
+        mutate(RMM.2021 = case_when(
+    RMM.2021 %in% c("C0", "-C1", "-C2") ~ "Standard of Care",
+    TRUE ~ "Better than SOC"))%>%
+        mutate(Isolate = iso,
+               Calculation = calc)%>%
+        mutate(Outcome = RMM.2021)%>%
+        mutate(In.vivo.Model = "Relapsing")%>%
+         mutate(value = select(., matches(calc))[[1]])%>%
+        select(Isolate,
+              Calculation,
+              In.vivo.Model,
+               Drug,
+               Outcome,
+             value)
+      
+      # Add p values
+        pval.RMM <- MTB.stats %>%
+        select(.y.,
+                 In.vivo.outcome,
+                 p)%>%
+          filter(str_detect(.y., iso) & str_detect(.y., calc) & str_detect(In.vivo.outcome,
+                                                                           "RMM.2021"))  # Filter based on both patterns
+        
+        
+       MTB.mic.sub.RMM <-  MTB.mic.sub.RMM %>%
+         mutate(p = pval.RMM$p)%>%
+         mutate(p = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)))
+   
+             MTB.mic.sub.RMM$Outcome <- factor(      MTB.mic.sub.RMM$Outcome, 
+                                                     levels = c("Standard of Care", "Better than SOC"))
+
+       rm(pval.RMM)
+       
+      ##  ggplot RMM
+      gg.RMM <- ggplot(MTB.mic.sub.RMM, 
+                       aes(x = Outcome, 
+                           y = value, 
+                           fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA,
+                     alpha = 0.5,
+                     size = 0.2) +
+           
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+              geom_jitter(color = "black", 
+                          size = 0.3, 
+                          alpha = 1, 
+                          shape = 20, 
+                          position = position_jitter(seed = 1, 
+                                                     width = 0.3, 
+                                                     height = 0)) +
+                 scale_fill_manual(values = c("Standard of Care" = "coral",
+                                              "Better than SOC" = "darkgreen")) +
+    scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5))+  # Set y-axis limits and intervals
+        labs(
+          x = "",
+     #  y = bquote(atop(mc^2 * " 700", atop(.(calc), "MIC (Log2)")))) +  # Using atop for new lines
+      y = paste("mc² 7000\n", calc, "\nMIC (Log2)", sep = "")) +  # Using paste for consistent text
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+         axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 2),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()
+        ) +
+
+       facet_grid( ~  In.vivo.Model + p ,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+    
+      plot_key <- paste(iso, calc, "RMM", sep = "_")
+      gg.plot.list [[plot_key]] <-      gg.RMM
+      
+      
+      rm(gg.RMM,
+         MTB.mic.sub.RMM)
+
+  #----- BMM 
+      
+      
+      MTB.mic.sub.BMM <-  MTB.mic.sub %>%
+        select(Drug,
+               BMM.2021,
+               matches(calc))%>%
+        drop_na()%>%
+        mutate(BMM.2021 = case_when(
+    BMM.2021 %in% c("C0", "-C1", "-C2") ~ "Standard of Care",
+    TRUE ~ "Better than SOC"))%>%
+        mutate(Isolate = iso,
+               Calculation = calc)%>%
+        mutate(Outcome = BMM.2021)%>%
+        mutate(In.vivo.Model = "Bactericidal")%>%
+         mutate(value = select(., matches(calc))[[1]])%>%
+        select(Isolate,
+              Calculation,
+              In.vivo.Model,
+               Drug,
+               Outcome,
+             value)
+      
+      # Add p values
+        pval.BMM <- MTB.stats %>%
+        select(.y.,
+                 In.vivo.outcome,
+                 p)%>%
+          filter(str_detect(.y., iso) & str_detect(.y., calc) & str_detect(In.vivo.outcome,
+                                                                           "BMM.2021"))  # Filter based on both patterns
+        
+        
+       MTB.mic.sub.BMM <-  MTB.mic.sub.BMM %>%
+         mutate(p = pval.BMM$p)%>%
+         mutate(p = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)))
+   
+             MTB.mic.sub.BMM$Outcome <- factor(      MTB.mic.sub.BMM$Outcome, 
+                                                     levels = c("Standard of Care", "Better than SOC"))
+
+    
+      gg.BMM <- ggplot(MTB.mic.sub.BMM, 
+                       aes(x = Outcome, 
+                           y = value, 
+                           fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA,
+                     alpha = 0.5,
+                     size = 0.2) +
+           
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+              geom_jitter(color = "black", 
+                          size = 0.3, 
+                          alpha = 1, 
+                          shape = 20, 
+                          position = position_jitter(seed = 1, 
+                                                    width = 0.3, 
+                                                     height = 0)) +
+                 scale_fill_manual(values = c("Standard of Care" = "coral",
+                                              "Better than SOC" = "darkgreen")) +
+    scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5))+  # Set y-axis limits and intervals
+        labs(
+          x = "",
+          y = "") +  
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+         axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 2),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()) +
+        facet_grid( ~  In.vivo.Model + p ,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+    
+      plot_key <- paste(iso, calc,
+                        "BMM",
+                        sep = "_")
+      
+      gg.plot.list [[plot_key]] <-gg.BMM
+      
+      
+      rm(gg.BMM,
+         pval.RMM,
+         pval.BMM,
+         MTB.mic.sub.BMM)
+      
+    # BBM granulomatous
+      
+      MTB.mic.sub.BMM.BHeB <-  MTB.mic.sub %>%
+        select(Drug,
+               BMM.BHeB.2021,
+               matches(calc))%>%
+        drop_na()%>%
+        mutate(BMM.BHeB.2021 = case_when(
+    BMM.BHeB.2021 %in% c("C0", "-C1", "-C2") ~ "Standard of Care",
+    TRUE ~ "Better than SOC"))%>%
+        mutate(Isolate = iso,
+               Calculation = calc)%>%
+        mutate(Outcome = BMM.BHeB.2021)%>%
+        mutate(In.vivo.Model = "Bactericidal granulomatous")%>%
+         mutate(value = select(., matches(calc))[[1]])%>%
+        select(Isolate,
+              Calculation,
+              In.vivo.Model,
+               Drug,
+               Outcome,
+             value)
+      
+      # Add p values
+        pval.BMM.BHeB <- MTB.stats %>%
+        select(.y.,
+                 In.vivo.outcome,
+                 p)%>%
+          filter(str_detect(.y., iso) & str_detect(.y., calc) & str_detect(In.vivo.outcome,
+                                                                           "BMM.BHeB.2021"))  # Filter based on both patterns
+        
+        
+       MTB.mic.sub.BMM.BHeB <-  MTB.mic.sub.BMM.BHeB %>%
+         mutate(p = pval.BMM.BHeB$p)%>%
+         mutate(p = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)))
+   
+             MTB.mic.sub.BMM.BHeB$Outcome <- factor(      MTB.mic.sub.BMM.BHeB$Outcome, 
+                                                     levels = c("Standard of Care", "Better than SOC"))
+    
+      gg.BMM.BHeB <- ggplot(MTB.mic.sub.BMM.BHeB, 
+                       aes(x = Outcome, 
+                           y = value, 
+                           fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA,
+                     alpha = 0.5,
+                     size = 0.2) +
+           
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+              geom_jitter(color = "black", 
+                          size = 0.3, 
+                          alpha = 1, 
+                          shape = 20, 
+                          position = position_jitter(seed = 1, 
+                                                     width = 0.3, 
+                                                     height = 0)) +
+                 scale_fill_manual(values = c("Standard of Care" = "coral",
+                                              "Better than SOC" = "darkgreen")) +
+    scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5))+  # Set y-axis limits and intervals
+        labs(
+          x = "",
+          y = "") +  
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+         axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 2),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()) +
+        facet_grid( ~  In.vivo.Model + p ,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+    
+      plot_key <- paste(iso, calc,
+                        "BMM.BHeB",
+                        sep = "_")
+      
+      gg.plot.list [[plot_key]] <-gg.BMM.BHeB
+      
+      
+      rm(gg.BMM.BHeB,
+         MTB.mic.sub.BMM.BHeB)
+      
+      # Clinical trial  ---------
+      MTB.mic.sub.Clinical <-  MTB.mic.sub %>%
+        select(Drug,
+               Clinical.2022,
+               matches(calc))%>%
+        drop_na()%>%
+        filter(Clinical.2022 != "ND")%>%
+        filter(Clinical.2022 != "C2-")%>%
+        mutate(Clinical.2022 = case_when(
+    Clinical.2022 %in% c( "C1-") ~ "Standard of Care",
+    TRUE ~ "Better than SOC"))%>%
+        mutate(Isolate = iso,
+               Calculation = calc)%>%
+        mutate(Outcome = Clinical.2022)%>%
+        mutate(In.vivo.Model = "Clinical trial")%>%
+         mutate(value = select(., matches(calc))[[1]])%>%
+        select(Isolate,
+              Calculation,
+              In.vivo.Model,
+               Drug,
+               Outcome,
+             value)
+      
+      # Add p values
+        pval.Clinical <- MTB.stats %>%
+        select(.y.,
+                 In.vivo.outcome,
+                 p)%>%
+          filter(str_detect(.y., iso) & str_detect(.y., calc) & str_detect(In.vivo.outcome,
+                                                                           "Clinical.2022"))  # Filter based on both patterns
+        
+        
+       MTB.mic.sub.Clinical <-  MTB.mic.sub.Clinical %>%
+         mutate(p = pval.Clinical$p)%>%
+         mutate(p = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)))
+   
+             MTB.mic.sub.Clinical$Outcome <- factor(      MTB.mic.sub.Clinical$Outcome, 
+                                                     levels = c("Standard of Care", "Better than SOC"))
+    
+      gg.Clinical <- ggplot(MTB.mic.sub.Clinical, 
+                       aes(x = Outcome, 
+                           y = value, 
+                           fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA,
+                     alpha = 0.5,
+                     size = 0.2) +
+           
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+              geom_jitter(color = "black", 
+                          size = 0.3, 
+                          alpha = 1, 
+                          shape = 20, 
+                          position = position_jitter(seed = 1, 
+                                                     width = 0.3, 
+                                                     height = 0)) +
+                 scale_fill_manual(values = c("Standard of Care" = "coral",
+                                              "Better than SOC" = "darkgreen")) +
+    scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5))+  # Set y-axis limits and intervals
+        labs(
+          x = "",
+          y = "") +  
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+         axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 2),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()) +
+        facet_grid( ~  In.vivo.Model + p ,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+    
+      plot_key <- paste(iso, calc,
+                        "Clinical",
+                        sep = "_")
+      
+      gg.plot.list [[plot_key]] <-gg.Clinical
+      
+      
+      rm(gg.Clinical,
+         MTB.mic.sub.Clinical)
+      
+      
+    
+    
+  }
+  
+}
+
+
+```
+
+
+## building gg.plot list for Iso.H37Ra
+```{r}
+
+list.of.Isolates <- c("Iso.H37Ra")
+
+for ( iso in list.of.Isolates ) {
+  
+  MTB.mic.sub <- MTB.mic %>%
+    select(Drug,
+           RMM.2021,
+           BMM.2021,
+           BMM.BHeB.2021,
+           Clinical.2022,
+           matches(iso))
+  
+  for( calc in list.of.calculations ) {
+    
+    # Relapsing Mouse model 2021
+    
+      MTB.mic.sub.RMM <-  MTB.mic.sub %>%
+        select(Drug,
+               RMM.2021,
+               matches(calc))%>%
+        drop_na()%>%
+        mutate(RMM.2021 = case_when(
+    RMM.2021 %in% c("C0", "-C1", "-C2") ~ "Standard of Care",
+    TRUE ~ "Better than SOC"))%>%
+        mutate(Isolate = iso,
+               Calculation = calc)%>%
+        mutate(Outcome = RMM.2021)%>%
+        mutate(In.vivo.Model = "Relapsing")%>%
+         mutate(value = select(., matches(calc))[[1]])%>%
+        select(Isolate,
+              Calculation,
+              In.vivo.Model,
+               Drug,
+               Outcome,
+             value)
+      
+      # Add p values
+        pval.RMM <- MTB.stats %>%
+        select(.y.,
+                 In.vivo.outcome,
+                 p)%>%
+          filter(str_detect(.y., iso) & str_detect(.y., calc) & str_detect(In.vivo.outcome,
+                                                                           "RMM.2021"))  # Filter based on both patterns
+        
+        
+       MTB.mic.sub.RMM <-  MTB.mic.sub.RMM %>%
+         mutate(p = pval.RMM$p)%>%
+         mutate(p = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)))
+   
+             MTB.mic.sub.RMM$Outcome <- factor(      MTB.mic.sub.RMM$Outcome, 
+                                                     levels = c("Standard of Care", "Better than SOC"))
+
+       rm(pval.RMM)
+       
+      ##  ggplot RMM
+      gg.RMM <- ggplot(MTB.mic.sub.RMM, 
+                       aes(x = Outcome, 
+                           y = value, 
+                           fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA,
+                     alpha = 0.5,
+                     size = 0.2) +
+           
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+              geom_jitter(color = "black", 
+                          size = 0.3, 
+                          alpha = 1, 
+                          shape = 20, 
+                          position = position_jitter(seed = 1, 
+                                                     width = 0.3, 
+                                                     height = 0)) +
+                 scale_fill_manual(values = c("Standard of Care" = "coral",
+                                              "Better than SOC" = "darkgreen")) +
+    scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5))+  # Set y-axis limits and intervals
+        labs(
+          x = "",
+     #  y = bquote(atop(mc^2 * " 700", atop(.(calc), "MIC (Log2)")))) +  # Using atop for new lines
+      y = paste("H37Ra\n", calc, "\nMIC (Log2)", sep = "")) +  # Using paste for consistent text
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+         axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 2),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()
+        ) +
+
+       facet_grid( ~  In.vivo.Model + p ,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+    
+      plot_key <- paste(iso, calc, "RMM", sep = "_")
+      gg.plot.list [[plot_key]] <-      gg.RMM
+      
+      
+      rm(gg.RMM,
+         MTB.mic.sub.RMM)
+
+  #----- BMM 
+      
+      
+      MTB.mic.sub.BMM <-  MTB.mic.sub %>%
+        select(Drug,
+               BMM.2021,
+               matches(calc))%>%
+        drop_na()%>%
+        mutate(BMM.2021 = case_when(
+    BMM.2021 %in% c("C0", "-C1", "-C2") ~ "Standard of Care",
+    TRUE ~ "Better than SOC"))%>%
+        mutate(Isolate = iso,
+               Calculation = calc)%>%
+        mutate(Outcome = BMM.2021)%>%
+        mutate(In.vivo.Model = "Bactericidal")%>%
+         mutate(value = select(., matches(calc))[[1]])%>%
+        select(Isolate,
+              Calculation,
+              In.vivo.Model,
+               Drug,
+               Outcome,
+             value)
+      
+      # Add p values
+        pval.BMM <- MTB.stats %>%
+        select(.y.,
+                 In.vivo.outcome,
+                 p)%>%
+          filter(str_detect(.y., iso) & str_detect(.y., calc) & str_detect(In.vivo.outcome,
+                                                                           "BMM.2021"))  # Filter based on both patterns
+        
+        
+       MTB.mic.sub.BMM <-  MTB.mic.sub.BMM %>%
+         mutate(p = pval.BMM$p)%>%
+         mutate(p = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)))
+   
+             MTB.mic.sub.BMM$Outcome <- factor(      MTB.mic.sub.BMM$Outcome, 
+                                                     levels = c("Standard of Care", "Better than SOC"))
+
+    
+      gg.BMM <- ggplot(MTB.mic.sub.BMM, 
+                       aes(x = Outcome, 
+                           y = value, 
+                           fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA,
+                     alpha = 0.5,
+                     size = 0.2) +
+           
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+              geom_jitter(color = "black", 
+                          size = 0.3, 
+                          alpha = 1, 
+                          shape = 20, 
+                          position = position_jitter(seed = 1, 
+                                                    width = 0.3, 
+                                                     height = 0)) +
+                 scale_fill_manual(values = c("Standard of Care" = "coral",
+                                              "Better than SOC" = "darkgreen")) +
+    scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5))+  # Set y-axis limits and intervals
+        labs(
+          x = "",
+          y = "") +  
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+         axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 2),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()) +
+        facet_grid( ~  In.vivo.Model + p ,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+    
+      plot_key <- paste(iso, calc,
+                        "BMM",
+                        sep = "_")
+      
+      gg.plot.list [[plot_key]] <-gg.BMM
+      
+      
+      rm(gg.BMM,
+         pval.RMM,
+         pval.BMM,
+         MTB.mic.sub.BMM)
+      
+    # BBM granulomatous
+      
+      MTB.mic.sub.BMM.BHeB <-  MTB.mic.sub %>%
+        select(Drug,
+               BMM.BHeB.2021,
+               matches(calc))%>%
+        drop_na()%>%
+        mutate(BMM.BHeB.2021 = case_when(
+    BMM.BHeB.2021 %in% c("C0", "-C1", "-C2") ~ "Standard of Care",
+    TRUE ~ "Better than SOC"))%>%
+        mutate(Isolate = iso,
+               Calculation = calc)%>%
+        mutate(Outcome = BMM.BHeB.2021)%>%
+        mutate(In.vivo.Model = "Bactericidal granulomatous")%>%
+         mutate(value = select(., matches(calc))[[1]])%>%
+        select(Isolate,
+              Calculation,
+              In.vivo.Model,
+               Drug,
+               Outcome,
+             value)
+      
+      # Add p values
+        pval.BMM.BHeB <- MTB.stats %>%
+        select(.y.,
+                 In.vivo.outcome,
+                 p)%>%
+          filter(str_detect(.y., iso) & str_detect(.y., calc) & str_detect(In.vivo.outcome,
+                                                                           "BMM.BHeB.2021"))  # Filter based on both patterns
+        
+        
+       MTB.mic.sub.BMM.BHeB <-  MTB.mic.sub.BMM.BHeB %>%
+         mutate(p = pval.BMM.BHeB$p)%>%
+         mutate(p = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)))
+   
+             MTB.mic.sub.BMM.BHeB$Outcome <- factor(      MTB.mic.sub.BMM.BHeB$Outcome, 
+                                                     levels = c("Standard of Care", "Better than SOC"))
+    
+      gg.BMM.BHeB <- ggplot(MTB.mic.sub.BMM.BHeB, 
+                       aes(x = Outcome, 
+                           y = value, 
+                           fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA,
+                     alpha = 0.5,
+                     size = 0.2) +
+           
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+              geom_jitter(color = "black", 
+                          size = 0.3, 
+                          alpha = 1, 
+                          shape = 20, 
+                          position = position_jitter(seed = 1, 
+                                                     width = 0.3, 
+                                                     height = 0)) +
+                 scale_fill_manual(values = c("Standard of Care" = "coral",
+                                              "Better than SOC" = "darkgreen")) +
+    scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5))+  # Set y-axis limits and intervals
+        labs(
+          x = "",
+          y = "") +  
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+         axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 2),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()) +
+        facet_grid( ~  In.vivo.Model + p ,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+    
+      plot_key <- paste(iso, calc,
+                        "BMM.BHeB",
+                        sep = "_")
+      
+      gg.plot.list [[plot_key]] <-gg.BMM.BHeB
+      
+      
+      rm(gg.BMM.BHeB,
+         MTB.mic.sub.BMM.BHeB)
+      
+      # Clinical trial  ---------
+      
+
+      
+      MTB.mic.sub.Clinical <-  MTB.mic.sub %>%
+        select(Drug,
+               Clinical.2022,
+               matches(calc))%>%
+        drop_na()%>%
+        filter(Clinical.2022 != "ND")%>%
+        filter(Clinical.2022 != "C2-")%>%
+        mutate(Clinical.2022 = case_when(
+    Clinical.2022 %in% c( "C1-") ~ "Standard of Care",
+    TRUE ~ "Better than SOC"))%>%
+        mutate(Isolate = iso,
+               Calculation = calc)%>%
+        mutate(Outcome = Clinical.2022)%>%
+        mutate(In.vivo.Model = "Clinical trial")%>%
+         mutate(value = select(., matches(calc))[[1]])%>%
+        select(Isolate,
+              Calculation,
+              In.vivo.Model,
+               Drug,
+               Outcome,
+             value)
+      
+      # Add p values
+        pval.Clinical <- MTB.stats %>%
+        select(.y.,
+                 In.vivo.outcome,
+                 p)%>%
+          filter(str_detect(.y., iso) & str_detect(.y., calc) & str_detect(In.vivo.outcome,
+                                                                           "Clinical.2022"))  # Filter based on both patterns
+        
+        
+       MTB.mic.sub.Clinical <-  MTB.mic.sub.Clinical %>%
+         mutate(p = pval.Clinical$p)%>%
+         mutate(p = ifelse(p < 0.0001, "P < 0.0001", paste("P =", p)))
+   
+             MTB.mic.sub.Clinical$Outcome <- factor(      MTB.mic.sub.Clinical$Outcome, 
+                                                     levels = c("Standard of Care", "Better than SOC"))
+    
+      gg.Clinical <- ggplot(MTB.mic.sub.Clinical, 
+                       aes(x = Outcome, 
+                           y = value, 
+                           fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA,
+                     alpha = 0.5,
+                     size = 0.2) +
+           
+      # Adding error bars at the ends of the quartile range
+           stat_boxplot(geom = "errorbar",
+                        width = 0.1, 
+                        size = 0.1) +
+              geom_jitter(color = "black", 
+                          size = 0.3, 
+                          alpha = 1, 
+                          shape = 20, 
+                          position = position_jitter(seed = 1, 
+                                                     width = 0.3, 
+                                                     height = 0)) +
+                 scale_fill_manual(values = c("Standard of Care" = "coral",
+                                              "Better than SOC" = "darkgreen")) +
+    scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5))+  # Set y-axis limits and intervals
+        labs(
+          x = "",
+          y = "") +  
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          strip.placement = "outside",
+          aspect.ratio = 1,
+          strip.text = element_text(size = 3),
+         axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 2),
+          axis.ticks.x = element_blank(),
+          axis.ticks.y = element_blank(),
+               axis.text = element_blank()) +
+        facet_grid( ~  In.vivo.Model + p ,
+                   scales = "free_x",
+                   switch = "y",
+                   labeller = labeller(.cols = label_wrap_gen(width = 100))) # Adjust width as needed
+    
+      plot_key <- paste(iso, calc,
+                        "Clinical",
+                        sep = "_")
+      
+      gg.plot.list [[plot_key]] <-gg.Clinical
+      
+      
+      rm(gg.Clinical,
+         MTB.mic.sub.Clinical)
+      
+  }
+  
+}
+```
+
+
+# Plot list of plot
+```{r}
+
+# Load the package
+library(gridExtra)
+
+
+plot.path <- paste0(info.resDir, "/", "ASCTsupp.fig4.pdf")
+
+
+# Open a PDF device to save the plots
+pdf(plot.path, width = 11, height = 8.5) # Set the dimensions as per your requirement
+
+
+grid.arrange(grobs = gg.plot.list, nrow = 6, ncol = 4, top = NULL)
+
+
+# Close the PDF device
+dev.off()
+
+```
+
+
+

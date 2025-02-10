@@ -1,0 +1,1027 @@
+# Aim
+
+
+```{r}
+# ==================================================================
+# Script for Statistical Analysis on PCA-Excluded Killing Features
+# ==================================================================
+# This R script applies statistical tests to assess the association
+# and correlation between different PCA-excluded killing features 
+# and clinical outcomes, using parametric and non-parametric methods.
+#
+# Functionality:
+# - Defines paths and experiment-specific parameters.
+# - Iterates over a list of ASCT experiments and retrieves 
+#   PCA-excluded killing feature datasets.
+# - Applies various statistical tests, including:
+#   - Non-parametric tests:
+#     * Wilcoxon test (Mann-Whitney U test)
+#     * Standard t-test (equal variance)
+#     * Welch t-test (unequal variance)
+#   - Parametric tests:
+#     * Pearson correlation
+#     * Linear regression
+# - Compares test performance to identify the strongest associations
+#   and evaluates which statistical test reflects the most robust 
+#   association after different exclusion criteria.
+# - Optionally excludes resistant isolates based on CLSI guidelines.
+# - Exports statistical results for further interpretation.
+#
+# Usage:
+# - Modify `list.of.experiments.to.analyse` to specify ASCT experiments.
+# - Set `Exclude.Isolates.considered.Resistant` to `"yes"` or `"no"`.
+# - Ensure required CSV files are present in the specified directories.
+#
+# This script is essential for identifying meaningful associations
+# in high-throughput bacterial killing feature datasets, 
+# facilitating robust statistical analyses in infectious disease research.
+
+```
+
+
+
+# loading libraries
+```{r setup, include=FALSE}
+
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(stringr)
+
+```
+
+# KEY step User input values
+```{r}
+list.of.experiments.to.analyse <- c(
+                     "ASCT.03",
+                    "ASCT.04",
+                    "ASCT.05",
+                     "ASCT.06",
+                     "ASCT.07",
+                     "ASCT.08",
+                     "ASCT.09",
+                    "ASCT.10",# Error when Using excluding Res with day 14 because no isolates are left for statistics
+                     "ASCT.12",
+                     "ASCT.13",
+                     "ASCT.14",
+                     "ASCT.15",
+                     "ASCT.16",
+                     "ASCT.18",
+                     "ASCT.19",
+                     "ASCT.20",
+                    "ASCT.21",
+                    "ASCT.22",
+                    "ASCT.23",
+                    "ASCT.24")
+# 
+#    list.of.experiments.to.analyse <- c(
+#                         "ASCT.16")
+
+#list.of.experiments.to.analyse <- c("ASCT.24")
+# Section 2: Loading packages
+
+# Either "yes" or "no" make sure no caps 
+Exclude.Isolates.considered.Resistant <- "no"
+
+
+  start <- Sys.time()
+
+
+
+```
+
+
+# 1. Exlcuding Resistant isolates based on CLSI guidelines
+
+## 1.1 Loading MIC data and data wrangling
+```{r}
+# load MIC data
+# Identify Resistant vs susceptible : if resistant to AMK or CLR then isolate is considered resistant and should be excluded
+# Antimicrobial Agents and Breakpoints for Testing Rapidly Growing Mycobacteria: Break point for Resistance given below
+CLSI.Amikicin.resistance <- 64
+CLSI.Clarithromycin.resistance <- 8
+
+MIC.df <- read.csv("/Users/Alex/Documents/PhD/PhD_project/PhD_project-Tolerance/R-ANALYSIS/Ranalysis_perwell/Ranalysis_perWell_TLKK/ASCT_Analysis_AJ_orginal/ASCT_EXPERIMENTS_v2-critical/MIC.asct_Resistance/MIC_data/20220412_ClinicalIsolates_CLSIGuidelines_Masterfile_clean-CSV.csv")
+
+
+# Idenitfy list of isolates wich are either clarithromycin of amikicin resitant
+
+MIC.df <- MIC.df %>%
+  mutate(Isolate = paste("Iso.",
+                         gsub(" ","",Strain),
+                         sep=""))%>%
+select(Isolate,
+       AMK,
+    CLR.Early.readout)
+
+MIC.df <- melt(MIC.df,
+               id.vars = "Isolate",
+              variable.name = "Abx",
+              value.name = "MIC")
+
+
+MIC.df <- MIC.df %>%
+  filter(Isolate != "Iso.ATCC700686(QC)MEDIAN")
+
+MIC.df.Atc <- MIC.df %>%
+  filter(Isolate == "Iso.ATCC19977")%>%
+  mutate(Isolate = "ATc.19979")
+ 
+
+
+MIC.df <- rbind(MIC.df ,
+                MIC.df.Atc)
+
+MIC.df <-MIC.df %>%
+   filter(Isolate != "Iso.ATCC700686(QC)")
+
+MIC.df <- MIC.df %>%
+  mutate(Abx = as.character(Abx))
+
+rm(MIC.df.Atc)
+
+
+
+```
+
+## 1.2 Defining Resistance of MIC data
+```{r}
+
+
+MIC.df <- MIC.df %>%
+  group_by(Isolate,
+           Abx)%>%
+  mutate(CLSI.Resistance = if_else(Abx == "AMK" & MIC >= CLSI.Amikicin.resistance, "R", 
+                                   if_else(Abx == "CLR.Early.readout" & MIC >= CLSI.Clarithromycin.resistance, "R", "S")))
+
+
+
+
+MIC.df.Res.Iso <- MIC.df %>%
+  ungroup()%>%
+filter(CLSI.Resistance == "R")%>%
+  select(Isolate)%>%
+  distinct()
+
+list.of.clsi.resistant.isolates <- MIC.df.Res.Iso$Isolate
+
+# Houskeeping
+rm(MIC.df,
+   MIC.df.Res.Iso)
+```
+
+# 2.  Loop to assess the association with  outcome across all features
+```{r}
+#please.do <- list.of.experiments.to.analyse[1]
+
+for ( please.do in list.of.experiments.to.analyse ) {
+  
+  Please.analyse <- please.do
+  
+  
+#Section 1: Defining paths and directories 
+
+
+genDir <- getwd() 
+
+
+# loading data from the PCA excluded outlier analysis
+data.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+res.dir <- c("ASCT_Experimental_Results/ASCT_3_statistical_tests")
+
+
+
+wdDir <- genDir
+
+data.dir <- paste(genDir,"/",data.dir ,sep="")
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+
+
+setwd(wdDir)
+
+#---- Define list of NON parametric tests
+list.of.nonparamatric.tests <- c("Welch", "Mann-Whitney/Wilcoxon", "Standard.t.test")
+
+# Please analyze Experiment drug and MD strategy
+
+
+# --- label directory file information to be used in Section 4  clinical isolates list
+# Navigate back one directory (assuming you want to go up one level)
+clinical.dir <- file.path(genDir, "..")
+
+# Enter the ASCT.Ranalysis_Exp_Info directory
+clinical.dir <- file.path(clinical.dir , "ASCT.Ranalysis_Exp_Info")
+# Enter the ASCT_CC directory
+clinical.dir <- file.path(clinical.dir , "ASCT_Clinical_Metadata")
+
+clinical.metadata.file <- c("ASCT_3_Clinical_Metadata_forAlex.csv")
+
+
+
+list.of.kf.data <- list.files(data.dir)
+
+
+
+# Initialize an empty list to store matched elements
+list.of.kf.data.specific <- list()
+
+# Loop through each element in the list
+for (element in list.of.kf.data) {
+  # Check if the element contains any string from the vector
+  if (any(grepl(paste(Please.analyse, collapse = "|"), element))) {
+    list.of.kf.data.specific <- append(list.of.kf.data.specific, list(element))
+  }
+}
+
+# Resulting list with matched elements
+
+
+
+
+list.of.kf.data.specific <- unlist(list.of.kf.data.specific )
+
+list.of.kf.data.specific <- list.of.kf.data.specific[grep(".csv", list.of.kf.data.specific)]
+
+
+# Exluding certain PCA and growth threshold outputs 
+list.of.kf.data.specific <- list.of.kf.data.specific[!grepl("_GT3_1_2_Killing_Features_PCAexl_", list.of.kf.data.specific)]
+
+list.of.kf.data.specific <- list.of.kf.data.specific[!grepl("_GT6.5_1_2_Killing_Features_PCAexl_", list.of.kf.data.specific)]
+
+# Housekeeping
+rm(list.of.kf.data,
+   element)
+
+
+# Calculate today's date in the same format (yyyymmdd)
+today_date <- as.Date(format(Sys.Date(), format = "%Y-%m-%d"))
+
+# Extract the dates from the file names
+file_dates <- as.Date(sub(".*_(\\d{8})\\..*", "\\1", list.of.kf.data.specific), format = "%Y%m%d")
+
+# Find the closest date to today's date
+closest_date <- file_dates[which.min(abs(file_dates - today_date))]
+
+# Filter elements with the closest date
+list.of.kf.data.specific <- list.of.kf.data.specific[file_dates == closest_date]
+
+rm(today_date,
+   file_dates,
+   closest_date)
+
+
+
+# Section 2.1: List of Files to apply statistical tests on
+PCAvariable.MAIN <-list.of.kf.data.specific
+
+
+
+# Loop through each PCA KF table
+
+PCAvariable.element <- PCAvariable.MAIN[3]
+
+for ( PCAvariable.element in PCAvariable.MAIN ) {
+  
+  PCAvariable <- PCAvariable.element #failed to merge export files
+
+
+  Mahalanobis.def <- ifelse(grepl("MD.2sd",PCAvariable ), "MD.2sd",
+                             ifelse(grepl("MD.3sd", PCAvariable ), "MD.3sd",
+                                      ifelse(grepl("MD.0sd", PCAvariable ), "MD.0sd",
+                                    
+                                    
+                                    "UNKNOWN")))
+
+GT.def <- sub(".*GT(.*?)_.*", "\\1",   PCAvariable)
+
+Norm.def <-  sub("_GT.*", "", PCAvariable)              
+Norm.def <- sub(".*x_", "", Norm.def)  
+PCAstrategy <- str_extract(PCAvariable, "PCAstr\\.(.*?)_")
+PCAstrategy <- gsub("_","",PCAstrategy)
+
+# Section 3:  Loading clincal metadata
+
+
+ Clinical.Metadata.df <- read.csv(paste(clinical.dir,
+                         "/",
+                         clinical.metadata.file,
+                         sep=""))
+
+# Select colunm of interest
+Clinical.Metadata.df <- Clinical.Metadata.df %>%
+  mutate(Isolate = paste("Iso.",
+                         as.character(ID),
+                         sep=""))%>%
+  select(Isolate,
+         Lane,
+         Patient,
+         Treated.for.M..abscessus.infection,
+        cf_status,
+        ATS.defined.NTM.pulmonary.disease.or.treated.for.M..abscessus,
+        OutcomeDef1,
+        FEV1_clearPers,
+        ClearedVSpersistant_ATS)%>%
+  drop_na()
+
+
+# Section 3: Loading PCA cureated results (ASCT_2 analysis)
+KF.PCAexl.df <- read.csv(paste(data.dir,
+                               "/",
+                                PCAvariable,
+                               sep=""))
+
+
+
+# List of all Killing features
+list.of.Killing.Feautres <- KF.PCAexl.df %>%
+  select(-Isolate)
+
+KF.PCAexl.df <- melt(KF.PCAexl.df,
+                     id.vars = "Isolate")
+
+KF.PCAexl.df  <- KF.PCAexl.df  %>%
+    mutate(value = as.character(value))%>%
+  mutate(value =if_else(value == ">72", "72", value),
+                         value)%>%
+  mutate(value = as.numeric(value))%>%
+  drop_na()
+
+KF.PCAexl.df <- dcast(KF.PCAexl.df, Isolate ~variable)
+
+# We identify variables with Inf
+selected_vars <-KF.PCAexl.df  %>%
+  select(where(~any(is.infinite(.))))
+
+
+
+list.of.Killing.Feautres  <- names(list.of.Killing.Feautres )
+
+
+# Find indices of elements containing "_MDK_"
+indices <- grep("_MDK_", list.of.Killing.Feautres)
+
+if (length(indices) == 0) {
+  # Your code for the "X" case goes here
+  # For example, you can print a message:
+  cat("Indices are empty.\n No MDK results to exclude")
+} else {
+  # Your code for the case when indices are not empty goes here
+  # For example, you can print the indices:
+  cat("Excluding MDK results", indices, "\n")
+  
+    # Remove elements with "_MDK_"
+list.of.Killing.Feautres <- list.of.Killing.Feautres[-indices]
+}
+
+
+  
+# Section 4: Merging clinical metadata with killing features
+ClinicalMD.KF <- left_join(Clinical.Metadata.df,
+                           KF.PCAexl.df)
+
+
+ClinicalMD.KF <- ClinicalMD.KF %>%
+  mutate(ClearedVSpersistant_ATS = as.numeric(ClearedVSpersistant_ATS))%>%
+  mutate(ClearedVSpersistant_ATS = if_else(ClearedVSpersistant_ATS == 2, "Persistant.Inf",
+                                    if_else(ClearedVSpersistant_ATS == 1, "Cleared.Inf" ,"UNKOWN")))
+
+
+
+
+# Here I make ifelse statement to exlude resistant isolates if variable  Exclude.Isolates.considered.Resistant == "yes"
+
+if ( Exclude.Isolates.considered.Resistant == "yes") {
+  
+ClinicalMD.KF <- ClinicalMD.KF %>%
+      filter(!(Isolate %in% list.of.clsi.resistant.isolates))
+
+  
+  
+}
+
+
+# Section 5:  Startistical test of ClearedVSpersistant_ATS  across each killing feature
+## 5.1 Loop for all statistical analysis
+
+
+# By default, the R t.test() function makes the assumption that the variances of the two groups of samples, being compared, are different. Therefore, Welch t-test is performed by default. Welch t-test is just an adaptation of t-test, and it is used when the two samples have possibly unequal variances.
+# ### Welch two sample test , Wilconx==Mann-whitnney and standard t.test
+
+
+# Create an empty data frame
+  NonParm.Test.res.df <- data.frame(
+  TStat.test.variable = character(),
+  Sample.size = numeric(),
+
+  Method = character(),
+  Value = numeric())
+
+# list of Killing feartures variable to loop through
+
+
+n.iterartions <- length(list.of.Killing.Feautres)
+progress <- 0
+
+
+#---
+  for ( i in list.of.Killing.Feautres ) {
+  
+    message("Feature :", i)
+  progress  <- progress + 1
+
+  tryCatch ({
+    
+  ClinicalMD.KF.subset <- ClinicalMD.KF %>%
+  dplyr::select(Isolate,
+         Patient,
+         Lane,
+         Treated.for.M..abscessus.infection,
+         cf_status,
+         ATS.defined.NTM.pulmonary.disease.or.treated.for.M..abscessus,
+         ClearedVSpersistant_ATS,
+         i
+         )%>%
+  drop_na()
+  
+# Check if there are any Inf values in the last column
+if (any(is.infinite(ClinicalMD.KF.subset[, ncol(ClinicalMD.KF.subset)]))) {
+  # If there are Inf values, then filter out rows with Inf values
+  ClinicalMD.KF.subset <- ClinicalMD.KF.subset %>%
+    filter(!is.infinite(ClinicalMD.KF.subset[, ncol(ClinicalMD.KF.subset)]))
+}
+  
+
+  Sample.Size <- nrow(ClinicalMD.KF.subset)
+  
+  # Continuous variable
+  cont.var <-   ClinicalMD.KF.subset %>% select(i)
+  cont.var <-  cont.var[,1]
+  
+  # catergorical variable
+  cat.var <- ClinicalMD.KF.subset$ClearedVSpersistant_ATS
+  
+ 
+ # LOOP 2: loop through the list of tests
+ for ( test in list.of.nonparamatric.tests) {
+   
+   if ( test == "Welch") {
+     
+     # Finds if there is statistically siginificant difference between the means
+      Stat.Test.results <- t.test(  cont.var ~  cat.var,
+                            paired = FALSE, 
+                            alrernative =c("two.sided"))
+      
+
+
+  # Create a subset results directory which will contation the results pulled from the t.test analysis
+    NonParm.Test.res.df.subset <- data_frame(
+  T.test.variable = i,
+  Sample.size = Sample.Size,
+  Method = paste(Stat.Test.results[["method"]], " p.value", sep=""),
+  Value =  Stat.Test.results[["p.value"]]
+  )
+
+  NonParm.Test.res.df <- rbind(  NonParm.Test.res.df ,
+                         NonParm.Test.res.df.subset)
+  
+  }
+   
+   if ( test == "Standard.t.test") {
+     
+
+ 
+       # Finds if there is statistically siginificant difference between the means
+      Stat.Test.results <- t.test(  cont.var ~  cat.var,
+                            paired = FALSE, 
+                           var.equal = TRUE,
+                            alrernative =c("two.sided"))
+
+
+  # Create a subset results directory which will contation the results pulled from the t.test analysis
+    NonParm.Test.res.df.subset <- data_frame(
+  T.test.variable = i,
+  Sample.size = Sample.Size,
+  Method = paste(Stat.Test.results[["method"]], " p.value", sep=""),
+  Value =  Stat.Test.results[["p.value"]]
+  )
+
+  NonParm.Test.res.df <- rbind(  NonParm.Test.res.df ,
+                         NonParm.Test.res.df.subset)
+  }
+   
+   
+   if ( test == "Mann-Whitney/Wilcoxon"){
+     
+         # Finds if there is statistically siginificant difference between the medians
+      Stat.Test.results <- wilcox.test(  cont.var ~  cat.var, 
+                                 paired = FALSE, 
+                                 alrernative =c("two.sided"))
+
+  # Create a subset results directory which will contation the results pulled from the t.test analysis
+  NonParm.Test.res.df.subset <- data_frame(
+  T.test.variable = i,
+  Sample.size = Sample.Size,
+  Method = paste(Stat.Test.results[["method"]], "/Mann–Whitney U test p.value", sep=""),
+  Value =  Stat.Test.results[["p.value"]]
+  )
+
+  NonParm.Test.res.df <- rbind(  NonParm.Test.res.df ,
+                         NonParm.Test.res.df.subset)
+     
+   }
+
+ }
+ 
+  # Houskeeping
+  rm(  NonParm.Test.res.df.subset ,
+   Sample.Size,
+   Stat.Test.results) 
+  
+  }, error = function(err) {
+    # Handle the error for the current iteration
+    message("Error in iteration: ", i)
+    # Save the iteration with error (i.e., i value) to a variable or data structure for further analysis
+  })
+
+  
+  }
+
+message("CONGRATULATIONS: non-parametric statistical analysis ended")
+
+  # Houskeeping
+  rm(i,
+     n.iterartions,
+     progress,
+     test)
+
+# Splitting up Test.variable to sub categories
+  NonParm.Test.res.df  <- separate(NonParm.Test.res.df , col = T.test.variable,
+                       into = c("Abx.con",
+                                "Strategy",
+                                "Def",
+                                "KF",
+                                "time",
+                                "Experiment"),
+                       sep="_")
+
+  NonParm.Test.res.df <- NonParm.Test.res.df %>%
+  mutate(Killing.Definition = paste(Strategy,
+                                    Def,
+                                    sep="_"))%>%
+  mutate(Killing.Feature = paste(KF,
+                                 time,
+                                 sep="_"))%>%
+  select(-Strategy,
+         -Def,
+         -KF,
+         -time,
+         -Experiment)
+
+  NonParm.Test.res.df <- NonParm.Test.res.df %>%
+    mutate(Outcome = "ClearedVSpersistant_ATS")%>%
+  select(Abx.con,
+         Killing.Definition,
+         Killing.Feature,
+         Method,
+         Sample.size,
+          Outcome,
+         everything())
+
+
+  NonParm.Test.res.df.TO.POOL.with.FEV1 <- NonParm.Test.res.df 
+
+## Plot:  All non parametric statistical results
+
+
+# Section 6: Startistical test of FEV1_clearPers  across each killing feature
+# 
+# type of tests I should apply on the FEV1_clearPers,
+# FEV1_clearPers is a continuous data ie parametric ananylsis
+# -spearman,
+# -linear regression
+
+## 6.1 Spearman correlation and linear regression test 
+# In summary, correlation tests focus on describing the strength and direction of the relationship between variables, while linear regression aims to model and analyze the relationship, providing insights into the effects of predictor variables on the response variable and allowing for prediction.
+
+# Create an empty data frame
+  Corr.test.res.df <- data.frame(
+  T.test.variable = character(),
+  Sample.size = numeric(),
+  Method = character(),
+  Value = numeric())
+
+
+  LinReg.test.res.df <- data.frame(
+  T.test.variable = character(),
+  Sample.size = numeric(),
+  Method = character(),
+  Value  = numeric())
+
+# list of Killing feartures variable to loop through
+  list.of.Killing.Feautres <- KF.PCAexl.df %>%
+  select(-Isolate)
+
+  list.of.Killing.Feautres  <- names(list.of.Killing.Feautres )
+
+  
+  # Find indices of elements containing "_MDK_"
+  
+indices <- grep("_MDK_", list.of.Killing.Feautres)
+
+# Check if indices are not equal to integer(0)
+if (!identical(indices, integer(0))) {
+  # Do X
+list.of.Killing.Feautres <- list.of.Killing.Feautres[-indices]
+
+} 
+
+  
+  n.iterartions <- length(list.of.Killing.Feautres)
+  progress <- 0
+
+
+  for ( i in list.of.Killing.Feautres ) {
+  
+  progress  <- progress + 1
+  
+  tryCatch ({
+    
+  ClinicalMD.KF.subset <- ClinicalMD.KF %>%
+  select(Isolate,
+         Patient,
+         Lane,
+         Treated.for.M..abscessus.infection,
+         cf_status,
+         ATS.defined.NTM.pulmonary.disease.or.treated.for.M..abscessus,
+          FEV1_clearPers,
+         i)%>%
+      drop_na()%>%
+    filter( FEV1_clearPers != "ND")%>%
+    mutate(FEV1_clearPers = as.numeric(FEV1_clearPers))
+
+    
+# Check if there are any Inf values in the last column
+if (any(is.infinite(ClinicalMD.KF.subset[, ncol(ClinicalMD.KF.subset)]))) {
+  # If there are Inf values, then filter out rows with Inf values
+  ClinicalMD.KF.subset <- ClinicalMD.KF.subset %>%
+    filter(!is.infinite(ClinicalMD.KF.subset[, ncol(ClinicalMD.KF.subset)]))
+}
+
+  Sample.Size <- nrow(ClinicalMD.KF.subset)
+  
+#--- Correlation test
+ # Defining the x and y variables to make correlation with
+  cont.var1 <- ClinicalMD.KF.subset$FEV1_clearPers
+ 
+  cont.var2 <-   ClinicalMD.KF.subset %>% select(i)
+  cont.var2 <-  cont.var2[,1]
+  
+  
+ Results.SpearMan.corrTest <- cor.test(cont.var1,
+                              cont.var2, method = "spearman",exact=FALSE)
+ 
+ Results.Pearson.corrTest <- cor.test(cont.var1,
+                              cont.var2, method = "pearson",exact=FALSE)
+
+# Linear regression test 
+ 
+ formula <- paste("FEV1_clearPers ~", i)
+ 
+ 
+  LM.test <- lm(  formula ,
+                data =   ClinicalMD.KF.subset)
+  
+  LM.test <- summary(LM.test)
+
+# Adding correlation results to table
+  # Create a subset results directory which will contation the results pulled from the t.test analysis
+   Corr.test.res.df.subset <- data_frame(
+  T.test.variable = i,
+  Sample.size = Sample.Size,
+  Method =  paste(Results.SpearMan.corrTest[["method"]], " p-Value", sep = ""),
+  Value =  Results.SpearMan.corrTest[["p.value"]]
+  )
+
+   
+     Corr.test.res.df.subset2 <- data_frame(
+  T.test.variable = i,
+  Sample.size = Sample.Size,
+  Method =   paste(Results.Pearson.corrTest[["method"]], " p-Value", sep = ""),
+  Value =  Results.Pearson.corrTest[["p.value"]]
+  )
+   
+    LinReg.test.res.df.subset <- data_frame(
+  T.test.variable = i,
+  Sample.size = Sample.Size,
+  Method = "Linear reg Rsqr",
+  Value  =  LM.test[["r.squared"]]
+  )
+
+# Concatenating results to signal data frame
+  Corr.test.res.df  <- rbind(  Corr.test.res.df,
+                         Corr.test.res.df.subset)
+  
+  Corr.test.res.df  <- rbind(  Corr.test.res.df,
+                         Corr.test.res.df.subset2)
+  
+   
+  LinReg.test.res.df  <- rbind(   LinReg.test.res.df,
+                         LinReg.test.res.df.subset)
+
+  # Houskeeping
+  rm(Corr.test.res.df.subset ,
+     Corr.test.res.df.subset2 ,
+     Results.Pearson.corrTest,
+   
+     LM.test,
+     Results.SpearMan.corrTest,
+  LinReg.test.res.df.subset ,
+  Sample.Size,
+  formula) 
+  
+  }, error = function(err) {
+    # Handle the error for the current iteration
+    message("Error in iteration: ", i)
+    # Save the iteration with error (i.e., i value) to a variable or data structure for further analysis
+  })
+
+  
+  }
+  
+  Corr.LinReg.res.df <- rbind(Corr.test.res.df,
+                              LinReg.test.res.df)
+  #Houskeeping
+  rm(Corr.test.res.df,
+     LinReg.test.res.df,
+      n.iterartions,
+     progress)
+  
+    Corr.LinReg.res.df <-   Corr.LinReg.res.df %>%
+      mutate(Outcome = "FEV1_clearPers")
+  
+  # Splitting up Test.variable to sub categories
+  Corr.LinReg.res.df  <- separate(Corr.LinReg.res.df , col = T.test.variable,
+                       into = c("Abx.con",
+                                "Strategy",
+                                "Def",
+                                "KF",
+                                "time",
+                                "Experiment"),
+                       sep="_")
+
+  Corr.LinReg.res.df <- Corr.LinReg.res.df %>%
+  mutate(Killing.Definition = paste(Strategy,
+                                    Def,
+                                    sep="_"))%>%
+  mutate(Killing.Feature = paste(KF,
+                                 time,
+                                 sep="_"))%>%
+  select(-Strategy,
+         -Def,
+         -KF,
+         -time,
+         -Experiment)
+
+  Corr.LinReg.res.df <- Corr.LinReg.res.df %>%
+  select(Abx.con,
+         Killing.Definition,
+         Killing.Feature,
+         Method,
+         Sample.size,
+         Outcome,
+         everything())
+  
+  NonParm.Test.res.df<- rbind(NonParm.Test.res.df,
+                                                  Corr.LinReg.res.df )
+  
+   Para.Test.res.df <-  Corr.LinReg.res.df 
+   
+   rm(Corr.LinReg.res.df)
+
+
+## 6.1.1 Intermediary export 
+# Export for each drug the following
+# 
+# -Sample size P.Ila_scvs AUCrt_0.72h_Welch
+# -Sample size P.Ila_scvs AUCrtLOG_0.72h_Welch
+# -Sample size P.Ila_scvs AUCrt_0.72h_Mann.Whitney
+# -Sample size P.Ila_scvs AUCrtLOG_0.72h_Mann.Whitney
+# 
+# -Abx.con_Trk2_2Ila_AUCrt_0.72h_Welch
+# -Abx.con_Trk2_2Ila_AUCrt_0.72h_Mann.Whitney
+# -Abx.con_Trk2_2Ila_AUCrtLOG_0.72h_Welch
+# -Abx.con_Trk2_2Ila_AUCrtLOG_0.72h_Mann.Whitney
+# 
+# -Abx.con_P.Ila_scvs_AUCrt_0.72h_Welch
+# -Abx.con_P.Ila_scvs_AUCrt_0.72h_Mann.Whitney
+# -Abx.con_P.Ila_scvs_AUCrtLOG_0.72h_Welch
+# -Abx.con_P.Ila_scvs_AUCrtLOG_0.72h_Mann.Whitney
+# 
+# 
+# -Sample size  Trk2_2Ila AUCrt_0.72h_Welch
+# -Sample size Trk2_2Ila AUCrtLOG_0.72h_Welch
+# -Sample size  Trk2_2Ila AUCrt_0.72h_Mann.Whitney
+# -Sample size Trk2_2Ila AUCrtLOG_0.72h_Mann.Whitney
+
+
+# Intermediary export
+Non.Para.Test.intr.exp <- NonParm.Test.res.df %>%
+  filter(Killing.Feature == "AUCrt_0.72h" |Killing.Feature == "AUCrtLOG_0.72h" |Killing.Feature == "AUCrt_0.72h.lg10" )%>%
+  mutate(Method.Simplified = if_else( Method == "Welch Two Sample t-test p.value", "Welch.Test", 
+                                      if_else(Method == "Wilcoxon rank sum test with continuity correction/Mann–Whitney U test p.value", "MannWhitneyU.Test",
+                                              if_else(Method ==  "Wilcoxon rank sum exact test/Mann–Whitney U test p.value", "MannWhitneyU.Test", 
+                                                      if_else( Method == " Two Sample t-test p.value", "T.Test",
+                                                                     if_else( Method == "Spearman's rank correlation rho p-Value", "SpearmansRankCorrPval.Test",
+                                                                                if_else( Method == "Pearson's product-moment correlation p-Value", "PearsonsCorrPval.Test",
+                                                                                           if_else( Method == "Linear reg Rsqr", "LinearReg.Rsqrval.Test",
+                                                               
+                                                               "UNKOWN"))))))))%>%
+  mutate(Definiton.Sample.Size = paste(Killing.Definition, 
+                                       "_Sample.Size",sep=""),
+         Definiton.Method = paste(Killing.Definition,
+                                  Method.Simplified,
+                                  Killing.Feature,
+                                  sep="_"))%>%
+  select(Abx.con,
+            Definiton.Method,
+         Definiton.Sample.Size,
+         Sample.size,
+         Outcome,
+         Value)%>%
+  distinct()
+
+Non.Para.Test.intr.exp.Spread1 <- Non.Para.Test.intr.exp%>%
+  select(Abx.con,
+            Definiton.Method,
+            Value)
+
+Non.Para.Test.intr.exp.Spread2 <- Non.Para.Test.intr.exp%>%
+  mutate(Definiton.Sample.Size = paste(Definiton.Sample.Size,
+                                       sub(".*.Test_", "",Definiton.Method),
+                                       sep="_"))%>%
+ # distinct(Definiton.Sample.Size)%>%
+  select(Abx.con,
+              Outcome,
+           Definiton.Sample.Size,
+                    Sample.size)%>%
+  distinct()
+  
+  
+ Non.Para.Test.intr.exp.Spread1 <- spread(Non.Para.Test.intr.exp.Spread1,   Definiton.Method,
+                                         Value)
+ 
+   
+ Non.Para.Test.intr.exp.Spread2 <- spread(Non.Para.Test.intr.exp.Spread2,    Definiton.Sample.Size,
+                                          Sample.size)
+ 
+ Non.Para.Test.intr.exp <- left_join( Non.Para.Test.intr.exp.Spread2,
+                                       Non.Para.Test.intr.exp.Spread1)
+ 
+ rm( Non.Para.Test.intr.exp.Spread2 ,
+      Non.Para.Test.intr.exp.Spread1)
+ 
+ 
+#-- 
+ res.dir.int <- paste(res.dir,
+                      "/",
+                      unique(Non.Para.Test.intr.exp$Abx.con),
+                      "_Simplified_Stats",
+                      sep="")
+ 
+ # Create the new directory if it doesn't exist
+if (!dir.exists( res.dir.int)) {
+  dir.create( res.dir.int, recursive = TRUE)
+}
+ 
+exp.id <- list.of.Killing.Feautres[1]
+
+exp.id <-sub(".*_ASCT\\.", "", exp.id )
+exp.id <- paste("ASCT.",
+               exp.id,
+               "_",
+               unique(Non.Para.Test.intr.exp$Abx.con),
+                 "_",
+                            Norm.def,
+               "_",
+               "GT",
+               GT.def,
+               "_",
+               Mahalanobis.def,
+               "_",
+               PCAstrategy,
+                             "_Simplified.Stats.csv",sep="")
+
+if ( Exclude.Isolates.considered.Resistant == "yes") {
+  
+  exp.id <- gsub("_Simplified.Stats.csv", "_Simplified.Stats-ExclResIso.csv",exp.id)
+  
+}
+
+ 
+ write.csv(Non.Para.Test.intr.exp, paste( res.dir.int,"/",
+                    exp.id,sep=""),
+           row.names = FALSE)
+ 
+ rm( res.dir.int,
+     exp.id,
+     Non.Para.Test.intr.exp)
+ 
+
+
+
+
+# Section 7:  Exporting results
+
+NonParm.Test.res.df.EXPORT <- NonParm.Test.res.df%>%
+  mutate(KF.Variable = paste(Abx.con,
+                             Killing.Definition,
+                             Killing.Feature,sep="_"))%>%
+  mutate(p.value = Value)%>%
+  select(KF.Variable,
+         Method,
+        # Sample.size,
+         Outcome,
+        p.value)
+
+
+#str(NonParm.Test.res.df.EXPORT)
+
+NonParm.Test.res.df.EXPORT <- NonParm.Test.res.df.EXPORT  %>%
+  pivot_wider(
+    names_from = KF.Variable,
+    values_from = p.value
+  )
+
+# Parametric test export
+Para.Test.res.df.EXPORT <- Para.Test.res.df%>%
+  mutate(KF.Variable = paste(Abx.con,
+                             Killing.Definition,
+                             Killing.Feature,sep="_"))%>%
+  mutate(p.value = Value)%>%
+  select(KF.Variable,
+         Method,
+        # Sample.size,
+         Outcome,
+        p.value)
+
+
+
+Para.Test.res.df.EXPORT <- Para.Test.res.df.EXPORT  %>%
+  pivot_wider(
+    names_from = KF.Variable,
+    values_from = p.value)
+
+All.tests.merged.export <- rbind(NonParm.Test.res.df.EXPORT,
+                                 Para.Test.res.df.EXPORT)
+
+rm(Para.Test.res.df.EXPORT,
+  NonParm.Test.res.df.EXPORT )
+
+pvalue.name.filepath <- paste(res.dir,"/",
+                            str_extract(PCAvariable, "^(.*?)_(.*?)_"),
+                            "1_2_3",
+                            "_",
+                            Norm.def,
+                            "_",
+                               "GT",
+               GT.def,
+
+                                  "_",  Mahalanobis.def,"_",
+                            PCAstrategy,
+               "_",
+                            "Statistical_Results_",
+                            format(Sys.time(), "%Y%m%d"),
+                      ".csv",sep="")
+
+
+
+#
+if ( Exclude.Isolates.considered.Resistant == "yes") {
+  
+pvalue.name.filepath <- gsub("Statistical_Results_", "Statistical_Results-ExclResIso_",pvalue.name.filepath )
+  
+}
+
+write.csv(All.tests.merged.export,
+          pvalue.name.filepath,
+          row.names = FALSE)
+
+
+  
+  
+}
+
+}
+               
+```
