@@ -1,0 +1,609 @@
+# Aim
+```{r}
+# ==================================================================
+# Summary: PCA-Based Analysis of Antibiotic-Isolate Relationships
+# ==================================================================
+# Aim:
+# This script evaluates relationships in PCA space, focusing on:
+# 1. Rows: Isolates vs. Columns: Drugs
+# 
+# Methodology:
+# - Loads and preprocesses experimental tracking and killing feature data.
+# - Merges experimental data with PCA filtering criteria (Mahalanobis distance at 0sd, 2sd, 3sd).
+# - Evaluates how different PCA exclusion thresholds impact isolate and well retention.
+# - Computes isolate and well counts across PCA filtering strategies.
+# - Outputs a summary table of retained isolates and wells across conditions.
+
+# Key Outputs:
+# - Dataset summarizing the number of retained isolates and wells for each PCA threshold.
+# - CSV file containing isolate and well counts for each experiment.
+# - Insights into the effect of PCA-based outlier exclusion on dataset size.
+
+# Next Steps:
+# - Analyze downstream effects of PCA exclusion on statistical tests.
+# - Refine selection criteria for optimal data retention.
+# - Incorporate additional metadata for enhanced interpretation.
+
+```
+
+
+# Section 1: Defining variables
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+
+#Pop data variables
+data.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+res.dir <- c("ASCT_Experimental_Results/ASCT_4_Figures")
+
+exp.res.dir <- c(paste(genDir,
+                       "/",
+                       "ASCT_Experimental_Results/ASCT_4_Figures",sep=""))
+wdDir <- genDir
+
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+setwd(wdDir)
+
+# list the experiment directories to pull the tracking data
+
+list.of.drugs<- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x",
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x",
+                  "ASCT.24_MXF10x"
+                                  )
+
+
+# EDIT the time scale axis that should be used 
+plot.xaxis.time.scale <- c(0,12,24,36,48,60,72)
+
+```
+
+# Section 2: Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+
+today <- format(Sys.Date(), "%Y%m%d")
+
+
+```
+
+## 2.1 Loop through Experimental Results
+```{r}
+
+Main.Tracking.df <- data.frame()
+
+Main.KF.df <- data.frame()
+Main.ASCTexp.KF.df <- data.frame()
+
+
+for ( expID in list.of.drugs ) {
+  
+  Fitnorm <- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x"
+                                  )
+
+# Top2norm
+Top2norm <- c("ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x")
+  
+# Check if expID matches any element in Fitnorm or Top2norm
+if (expID %in% Fitnorm) {
+  fitting.or.Top2.norm <- "Fitnorm"
+} else if (expID %in% Top2norm) {
+  fitting.or.Top2.norm <- "Top2norm"
+} else {
+  fitting.or.Top2.norm <- "Not found"
+}
+
+  
+
+
+path.subdir <- paste("Experimental-Results",
+                     sep="")
+
+list.of.pop.data.Dir  <- paste(dirname(normalizePath(wdDir)),
+                                    "/",
+                                   expID,
+                               "/",
+                         path.subdir,
+                         "/",
+                         fitting.or.Top2.norm,
+                                    sep ="")
+  
+  # Load KF.intermediary table
+  KFinter.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_KFintermediary_.csv", full.names = TRUE)
+
+
+  KF.intermediary.df <- read.csv(      KFinter.files)
+    
+    
+  KF.intermediary.df <-   KF.intermediary.df %>%
+           filter(Merge.def == "Trkv2_Ila2BaSic")%>%
+           select(ExpFile,
+                  Abx.con,
+                  Well_coordinate,
+                  Multiple.Events)%>%
+           distinct()
+
+         
+         
+rm(  KFinter.files)
+
+# Load Trkv2 Flags
+      Tracking.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_Flags.csv", full.names = TRUE)
+
+  Tracking.df <- read.csv(      Tracking.files )
+  
+    Tracking.df <-   Tracking.df %>%
+      filter(Time.Kill.Definitions == "Trkv2_Ila2BaSic")%>%
+      left_join(         KF.intermediary.df )
+    
+    
+    Main.Tracking.df <- rbind(    Main.Tracking.df,
+                                     Tracking.df )
+    
+         KFraw.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_rawKF.csv", full.names = TRUE)
+
+     
+    KFraw <- read.csv(        KFraw.files )
+    
+    KFraw <-KFraw %>%
+      filter(Killing.Def == "Trkv2_LCF_Ila2BaSic")
+    
+    
+    Main.KF.df <- rbind(    Main.KF.df ,   KFraw )
+    
+    rm(  Tracking.df ,
+            Tracking.files,
+             KF.intermediary.df,
+         KFraw)
+    
+    
+      #----  Loading ASCT exported KF table _Pop.Clinial.Isolates.KillingFeatures.csv this is the final isolates considered in analysis after the first local analysis
+    
+    
+       ASCTexp.KF.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2Clinial.Isolates.Tracking_KillingFeatures.csv", full.names = TRUE)
+
+  ASCTexp.df <- read.csv(             ASCTexp.KF.files )
+  
+  
+    ASCTexp.Trkv <-   ASCTexp.df  %>%
+      select(Isolate,
+            matches("Trkv2_Ila2BaSic") )
+    
+         ASCTexp.Trkv$value <-   ASCTexp.Trkv[,2]
+    
+        ASCTexp.Trkv <-   ASCTexp.Trkv %>%
+      mutate(Killing.Def ="Trkv2_Ila2BaSic",
+             ExperimentID = expID)%>%
+        select(Isolate,
+               Killing.Def,
+               ExperimentID,
+               value)
+ 
+
+
+Main.ASCTexp.KF.df  <- rbind(    Main.ASCTexp.KF.df  ,
+                                  ASCTexp.Trkv)
+    
+    rm(ASCTexp.SCbasic,
+       ASCTexp.SCVSbasic)
+    
+    
+}
+
+```
+
+
+
+```{r}
+# ---
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Killing.Def = gsub("Trkv2_LCF_Ila2BaSic","Trkv2_Ila2BaSic", Killing.Def))
+  
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Time_Hrs = gsub("h","",Sub.KF)) %>%
+  mutate(Time_Hrs = as.numeric(Time_Hrs))%>%
+  mutate(Time.Kill.Definitions = Killing.Def)%>%
+  mutate(Isolate = paste("Iso.", Isolate, sep=""))%>%
+  mutate(LC.fraction.corr = value)%>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+  select(ExpFile,
+         Abx.con,
+         Isolate,
+         ExpFile.Wellcoordinate ,
+         Well_coordinate,
+         Time_Hrs,
+         Time.Kill.Definitions ,
+         LC.fraction.corr)%>%
+  distinct()%>%
+  filter(Time_Hrs == 72) # KEEPING ONLY 72h KF
+  
+ 
+Main.Tracking.df <- Main.Tracking.df %>%
+  ungroup()%>%
+  filter(Overall.Assessment == "Keep" & 
+           Multiple.Events == "Keep")
+
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+  select(-Overall.Assessment,
+         -Multiple.Events,
+         -Flag.label)
+
+
+Main.Tracking.df <- Main.Tracking.df %>%
+mutate(timestep = as.numeric(timestep))
+
+
+list.of.Well.coordinates.Kept.in.analysis <- unique(Main.Tracking.df$ExpFile.Wellcoordinate)
+
+Main.KF.df <- Main.KF.df %>%
+  filter(ExpFile.Wellcoordinate %in% list.of.Well.coordinates.Kept.in.analysis)
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(timestep = as.numeric(31))
+
+# Assume your y-axis linear scale values range from 1 to 100%
+
+linear_breaks <- c( 40,50,60 ,70,80,90, 100) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+Main.KF.df  <- Main.KF.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+
+```
+
+# Merging Killing Features and Main tracking Data 
+```{r}
+
+Main.Tracking.df <- rbind(Main.Tracking.df,
+                          Main.KF.df)
+
+Main.ASCTexp.KF.df <- Main.ASCTexp.KF.df %>%
+  mutate(ExperimentID= if_else(ExperimentID == "ASCT.24_MXF10x", "ASCT.24_MXFb10x",ExperimentID))
+
+
+```
+
+
+
+# Considering only the Wells and isolates info
+```{r}
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  ungroup()%>%
+  select(ExpFile,
+         Abx.con,
+         Well_coordinate,
+         Isolate,
+         Time.Kill.Definitions)%>%
+  distinct()
+
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpID = str_extract(ExpFile,  ".*?(?=.2023)"))
+
+
+
+```
+
+# Loading PCA strategies ----
+```{r}
+
+PCA.df.dir <- paste(exp.res.dir,
+                    "/PCA-analysis",
+                    sep="")
+
+# List all CSV files in the directory with the specified pattern
+csv_files <- list.files(PCA.df.dir , pattern = ".csv", full.names = TRUE)
+
+# Extract filenames without extension
+file_ids <- tools::file_path_sans_ext(basename(csv_files))
+
+
+# Load all CSV files into a list of data frames
+list_of_dfs <- lapply(csv_files, function(file) {
+  df <- read.csv(file)
+  df$filename <- tools::file_path_sans_ext(basename(file))
+  return(df)
+})
+
+
+
+# Alternatively, if you want to combine them into a single data frame
+PCA.df <- do.call(rbind, list_of_dfs)
+
+#Houskeeping
+rm(csv_files,
+   list_of_dfs)
+
+
+
+PCA.df <- separate(PCA.df , col = filename ,
+                   into = c("ExpID",
+                            "Abx.con",
+                            "NormStr",
+                            "GrowthThreshold",
+                            "PCA.Strategy"),
+                   sep="_")
+
+PCA.df <- PCA.df %>%
+  mutate(PCA.Strategy = gsub(".csv", "", PCA.Strategy))
+
+PCA.df <- separate(PCA.df , col = Time.Kill.def ,
+                   into = c("Analysis.def1",
+                            "Analysis.def2"),
+                   sep="_")
+  
+PCA.df <- PCA.df %>%
+  mutate(Time.Kill.Definitions = paste(Analysis.def2,
+                                        Analysis.def1,
+                                        sep="_"))%>%
+  select(-Analysis.def1,
+         -Analysis.def2)
+
+
+PCA.df <- PCA.df %>%
+  select(-PC1,
+         -PC2,
+         -var.pc1,
+         -var.pc2,
+         -Mahalanobis.distance)
+
+PCA.df <- PCA.df %>%
+  filter(Time.Kill.Definitions == "Trkv2_Ila2BaSic")
+
+
+PCA.df <- PCA.df %>%
+mutate(Mahalanobis.Excl.res  = paste(MD.2sd,
+                                     MD.3sd,
+                                     sep="_") )%>%
+  select(ExpID,
+         Time.Kill.Definitions,
+         Abx.con,
+         Isolate,
+         NormStr,
+         GrowthThreshold,
+         PCA.Strategy,
+       Mahalanobis.Excl.res)
+
+PCA.df <- PCA.df %>%
+mutate(Mahalanobis.Excl.res = if_else(Mahalanobis.Excl.res == "_", "", Mahalanobis.Excl.res))
+
+PCA.df <- PCA.df %>%
+ mutate(Mahalanobis.Excl.res = if_else(Mahalanobis.Excl.res == "MD.2sd_", "MD.2sd", Mahalanobis.Excl.res))
+
+
+PCA.df <- PCA.df %>%
+mutate(Abx.con = gsub("\\.", "_", Abx.con))
+
+
+
+LOOP.Main.Tracking.df <- Main.Tracking.df 
+  
+
+  Outlook.Iso.Well.df <- data.frame()
+# Loop though each exp ID and Growth threshold def and add the infromation of Mahalanobis + PCA strategy
+  
+  list.of.ExpID <- unique(PCA.df$ExpID)
+  list.of.Growth.Thres <- unique(PCA.df$GrowthThreshold)
+  list.of.PCAstrategies <- unique(PCA.df$PCA.Strategy)
+
+  list.of.kill.def <- unique(PCA.df$Time.Kill.Definitions)
+
+for ( expID in list.of.ExpID ) {
+  
+
+  for( growth.Thrs in   list.of.Growth.Thres) {
+    
+    for ( pca.strategy in   list.of.PCAstrategies){
+      
+            for ( kill.def  in  list.of.kill.def ) {
+      
+          PCA.sub.df <- PCA.df %>%
+      filter(ExpID == expID & GrowthThreshold == growth.Thrs & PCA.Strategy == pca.strategy & Time.Kill.Definitions == kill.def)
+       
+       LOOP.Main.Tracking.df.sub <- LOOP.Main.Tracking.df %>%
+    filter(ExpID == expID &  Time.Kill.Definitions == kill.def)
+    
+      
+       
+      LOOP.Main.Tracking.df.sub.sub <- left_join(PCA.sub.df,
+                                                 LOOP.Main.Tracking.df.sub,
+                                                     
+                                             by = join_by(Isolate, Time.Kill.Definitions, ExpID, Abx.con) )
+      
+      
+      
+          LOOP.Main.Tracking.df.sub.sub <-      LOOP.Main.Tracking.df.sub.sub %>%
+              drop_na()
+    
+            
+              Outlook.Iso.Well.df <- rbind(  Outlook.Iso.Well.df,
+                                                       LOOP.Main.Tracking.df.sub.sub )
+              
+              
+      
+    }
+    
+        
+  }
+  
+}
+}
+    
+rm(PCA.sub.df,
+   MEAN.Main.Tracking.df.sub,
+   expID,
+   growth.Thrs,
+   pca.strategy,
+               MEAN.Main.Tracking.df.sub.sub )
+
+print(unique(Outlook.Iso.Well.df$GrowthThreshold))
+
+print(unique(Outlook.Iso.Well.df$PCA.Strategy))
+
+
+Outlook.Iso.Well.df <- Outlook.Iso.Well.df %>%
+  ungroup()%>%
+  distinct()
+
+
+rm(Main.Tracking.df.ORIGINAL,
+   LOOP.Main.Tracking.df,
+   Main.KF.df,
+   PCA.df,
+   Main.Tracking.df)
+
+```
+
+
+```{r}
+Outlook.Iso.Well.df.WELL <- Outlook.Iso.Well.df %>%
+  ungroup()%>%
+  group_by(ExpFile,
+           Time.Kill.Definitions,
+           GrowthThreshold,
+           PCA.Strategy)%>%
+  mutate(Sum.Well.0sd = 1,
+         Sum.Well.0sd  = sum(Sum.Well.0sd ),
+         Sum.Well.2sd = if_else(grepl("2sd", Mahalanobis.Excl.res), 0, 1),
+             Sum.Well.2sd.CHECK = if_else(grepl("2sd", Mahalanobis.Excl.res), 0, 1),
+         Sum.Well.2sd = sum(Sum.Well.2sd ),
+         Sum.Well.3sd= if_else(grepl("3sd", Mahalanobis.Excl.res), 0, 1),
+           Sum.Well.3sd.CHECK= if_else(grepl("3sd", Mahalanobis.Excl.res), 0, 1),
+          Sum.Well.3sd = sum( Sum.Well.3sd))%>%
+  ungroup()%>%
+  select(ExpFile,
+            Abx.con,
+         GrowthThreshold,
+         PCA.Strategy,
+         Time.Kill.Definitions,
+         Sum.Well.0sd,
+         Sum.Well.2sd,
+         Sum.Well.3sd)%>%
+  distinct()
+
+
+
+Outlook.Iso.Well.df.ISO <- Outlook.Iso.Well.df %>%
+  ungroup()%>%
+  select(-Well_coordinate)%>% # removing well coordinate because we are only calculating Iso numbers
+  distinct()%>%
+  group_by(ExpFile,
+           Time.Kill.Definitions,
+           GrowthThreshold,
+           NormStr,
+           PCA.Strategy)%>%
+ mutate(Sum.Iso.0sd = 1,
+         Sum.Iso.0sd  = sum(Sum.Iso.0sd ),
+         Sum.Iso.2sd = if_else(grepl("2sd", Mahalanobis.Excl.res), 0, 1),
+                     Sum.Iso.2sd.CHECK = if_else(grepl("2sd", Mahalanobis.Excl.res), 0, 1),
+
+         Sum.Iso.2sd = sum(Sum.Iso.2sd ),
+         Sum.Iso.3sd =  if_else(grepl("3sd", Mahalanobis.Excl.res),0, 1),
+                   Sum.Iso.3sd.CHECK= if_else(grepl("3sd", Mahalanobis.Excl.res), 0, 1),
+
+          Sum.Iso.3sd = sum( Sum.Iso.3sd))%>%
+  ungroup()%>%
+  select(ExpFile,
+         Abx.con,
+         GrowthThreshold,
+         PCA.Strategy,
+         Time.Kill.Definitions,
+         Sum.Iso.0sd,
+        Sum.Iso.2sd,
+        Sum.Iso.3sd)%>%
+  distinct()
+
+
+Sum.Iso.Well.df <- left_join(Outlook.Iso.Well.df.ISO,
+                             Outlook.Iso.Well.df.WELL)
+
+
+
+Plot.filename<- paste(res.dir,"/",
+                      "ASCT-Trkv_Comparing_Isolate.Well.Numbers_",
+                      today,
+                      ".csv", sep = "")
+
+write.csv(Sum.Iso.Well.df,
+            Plot.filename,
+          row.names =  FALSE)
+
+```

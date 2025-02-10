@@ -1,0 +1,1002 @@
+# Aim
+```{r}
+# ==================================================================
+# Summary: Time-Kill Kinetics of Lab Strain Under Antibiotic Conditions
+# ==================================================================
+# Aim:
+# This script analyzes bacterial survival over time in response to various antibiotics.
+# Key focus:
+# - Evaluating growth and survival in the presence of different antibiotics.
+# - Comparing well-level and mean kinetics.
+# - Selecting specific wells based on predefined criteria.
+
+# Methodology:
+# - Loads and processes experimental tracking data.
+# - Extracts well-coordinate information for specific antibiotics.
+# - Merges quality control (QC) flags to filter relevant wells.
+# - Evaluates selected wells based on predefined laboratory strain conditions.
+# - Computes mean killing kinetics for selected wells.
+# - Generates visualizations using both linear and log scales.
+
+# Key Outputs:
+# - Time-kill curves for individual wells and mean survival trends.
+# - Visualization of selected wells with color-coded exclusion criteria.
+# - Plots comparing antibiotic effects at different concentrations.
+
+# Next Steps:
+# - Further refine well selection based on biological relevance.
+# - Validate findings against external datasets.
+# - Explore additional PCA-based clustering of antibiotic responses.
+
+```
+
+
+# Section 1: Defining variables
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+
+#Pop data variables
+data.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+res.dir <- c("ASCT_Experimental_Results/ASCT_4.4_ATc_only")
+
+exp.res.dir <- c(paste(genDir,
+                       "/",
+                       "ASCT_Experimental_Results/ASCT_4.4_ATc_only",sep=""))
+wdDir <- genDir
+
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+setwd(wdDir)
+
+# list the experiment directories to pull the tracking data
+
+list.of.drugs<- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+                    
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x",
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x"
+                                  )
+
+
+# EDIT the time scale axis that should be used 
+plot.xaxis.time.scale <- c(0,12,24,36,48,60,72)
+
+```
+
+# Section 2: Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+
+```
+
+## 2.1 Loop through Experimental Results
+```{r}
+
+Main.Tracking.df <- data.frame()
+
+Main.KF.df <- data.frame()
+
+
+for ( expID in list.of.drugs ) {
+  
+  Fitnorm <- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x"
+                                  )
+
+# Top2norm
+Top2norm <- c("ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x")
+  
+# Check if expID matches any element in Fitnorm or Top2norm
+if (expID %in% Fitnorm) {
+  fitting.or.Top2.norm <- "Fitnorm"
+} else if (expID %in% Top2norm) {
+  fitting.or.Top2.norm <- "Top2norm"
+} else {
+  fitting.or.Top2.norm <- "Not found"
+}
+
+  
+
+
+path.subdir <- paste("Experimental-Results",
+                     sep="")
+
+list.of.pop.data.Dir  <- paste(dirname(normalizePath(wdDir)),
+                                    "/",
+                                   expID,
+                               "/",
+                         path.subdir,
+                         "/",
+                         fitting.or.Top2.norm,
+                                    sep ="")
+  
+  # Load KF.intermediary table
+      KFinter.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_KFintermediary_.csv", full.names = TRUE)
+
+
+    KF.intermediary.df <- read.csv(      KFinter.files)
+    
+    
+         KF.intermediary.df <-   KF.intermediary.df %>%
+           filter(Merge.def == "Trkv2_Ila2BaSic")%>%
+           select(ExpFile,
+                  Abx.con,
+                  Well_coordinate,
+                  Multiple.Events)%>%
+           distinct()
+
+         
+         
+rm(  KFinter.files)
+
+# Load Trkv2 Flags
+      Tracking.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_Flags.csv", full.names = TRUE)
+
+  Tracking.df <- read.csv(      Tracking.files )
+  
+    Tracking.df <-   Tracking.df %>%
+      filter(Time.Kill.Definitions == "Trkv2_Ila2BaSic")%>%
+      left_join(         KF.intermediary.df )
+    
+    
+    Main.Tracking.df <- rbind(    Main.Tracking.df,
+                                     Tracking.df )
+    
+         KFraw.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_rawKF.csv", full.names = TRUE)
+
+     
+    KFraw <- read.csv(        KFraw.files )
+    
+    KFraw <-KFraw %>%
+      filter(Killing.Def == "Trkv2_LCF_Ila2BaSic")
+    
+    
+    Main.KF.df <- rbind(    Main.KF.df ,   KFraw )
+    
+    rm(  Tracking.df ,
+            Tracking.files,
+             KF.intermediary.df,
+         KFraw)
+    
+    
+}
+
+
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Killing.Def = gsub("Trkv2_LCF_Ila2BaSic","Trkv2_Ila2BaSic", Killing.Def))
+  
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Time_Hrs = gsub("h","",Sub.KF)) %>%
+  mutate(Time_Hrs = as.numeric(Time_Hrs))%>%
+  mutate(Time.Kill.Definitions = Killing.Def)%>%
+  mutate(Isolate = paste("Iso.", Isolate, sep=""))%>%
+  mutate(LC.fraction.corr = value)%>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+  select(ExpFile,
+         Abx.con,
+         Isolate,
+         ExpFile.Wellcoordinate ,
+         Well_coordinate,
+         Time_Hrs,
+         Time.Kill.Definitions ,
+         LC.fraction.corr)%>%
+  distinct()%>%
+  filter(Time_Hrs == 72) # KEEPING ONLY 72h KF
+  
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))
+ 
+
+Main.Tracking.df <- Main.Tracking.df %>%
+mutate(timestep = as.numeric(timestep))
+
+
+list.of.Well.coordinates.Kept.in.analysis <- unique(Main.Tracking.df$ExpFile.Wellcoordinate)
+
+Main.KF.df <- Main.KF.df %>%
+  filter(ExpFile.Wellcoordinate %in% list.of.Well.coordinates.Kept.in.analysis)
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(timestep = as.numeric(31))
+
+# Assume your y-axis linear scale values range from 1 to 100%
+
+linear_breaks <- c( 40,50,60 ,70,80,90, 100) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+Main.KF.df  <- Main.KF.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+
+```
+
+# Merging Killing Features and Main tracking Data 
+```{r}
+
+Exp.QC <- Main.Tracking.df %>%
+  select(ExpFile,
+         Well_coordinate,
+         Flag.label,
+         Overall.Assessment,
+         Multiple.Events)%>%
+  distinct()
+  
+Main.Tracking.df <- Main.Tracking.df %>%
+  select(-Overall.Assessment,
+         -Multiple.Events,
+         -Flag.label)
+
+
+  
+Main.Tracking.df <- rbind(Main.Tracking.df,
+                          Main.KF.df)
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  left_join(Exp.QC)
+
+
+rm(Exp.QC)
+
+Main.Tracking.df.ATc <- Main.Tracking.df %>%
+  filter(Isolate == "Iso.ATc.19979")
+
+
+#Housekeeping
+rm(list.of.Well.coordinates.Kept.in.analysis,
+   Main.Tracking.df,
+   Main.KF.df)
+
+
+```
+
+
+```{r}
+
+  
+  plot.filename <- paste(exp.res.dir,"/ASCT_LabstrainOnly_LOG",
+
+          ".pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+
+
+#--- Y axsis ticks
+
+linear_breaks <- c( 0.40,0.50,0.60 ,0.70,0.80,0.90, 1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <-  c( 40,50,60 ,70,80,90, 100)
+
+library(ggrepel)
+gg <- Main.Tracking.df.ATc%>%
+ mutate(Well_Flag = paste(Well_coordinate,
+                           Flag.label,
+                           sep=" "))%>%
+    filter(Abx.con !="BDQ_20x")%>%
+
+  filter(Time_Hrs <= 72)%>%
+  ungroup()%>%
+  drop_na()%>%
+ 
+  ggplot(aes(x =Time_Hrs,
+             y = log10(LC.fraction.corr),
+             group = Well_coordinate,
+             label =Well_coordinate))+
+  geom_line( 
+             alpha = 0.25,
+             size = 0.2,
+             stroke = 0,
+             )+
+  
+     geom_text(data = .  %>% group_by(ExpFile,Well_coordinate) %>%
+                 top_n(n = 1,
+                       wt = Time_Hrs),
+      aes(label = Well_Flag ),
+      size = 0.2)+ # Original
+  theme_prism()+
+  scale_y_continuous(
+
+                    breaks = c(0, -0.999,  -1.999),
+                    limits = c(-3,0),
+                     labels = c(100, 10, 1))+
+
+   
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title = "Time kill cuvres of lab strain",
+         subtitle = "log scale",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Condition evaluation")+
+    geom_text(x=48, y=1,
+            size = 1)+ # Plot label
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+
+
+  facet_wrap_paginate( Abx.con + ExpID  ~Isolate,
+                      ncol =4,
+                      nrow =5,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(plot.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate( Abx.con + ExpID  ~Isolate,
+                      ncol =4,
+                      nrow =5, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   plot.filename,
+   g)
+  
+
+```
+
+# Linear scale
+```{r}
+ 
+  plot.filename <- paste(exp.res.dir,"/ASCT_LabstrainOnly_LIN",
+
+          ".pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+
+
+#--- Y axsis ticks
+
+linear_breaks <- c( 0.40,
+                    0.50,
+                    0.60,
+                    0.70,
+                    0.80,
+                    0.90,
+                    1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <-  c( 40,50,60 ,70,80,90, 100)
+
+library(ggrepel)
+gg <- Main.Tracking.df.ATc%>%
+  mutate(Well_Flag = paste(Well_coordinate,
+                           Flag.label,
+                           sep=" "))%>%
+  filter(Time_Hrs <= 72)%>%
+  filter(Abx.con !="BDQ_20x")%>%
+  ungroup()%>%
+  drop_na()%>%
+ 
+  ggplot(aes(x =Time_Hrs,
+             y = LC.fraction.corr,
+             group = Well_coordinate,
+             label =Well_coordinate))+
+  geom_line( 
+             alpha = 0.25,
+             size = 0.2,
+             stroke = 0,
+             )+
+     geom_text(data = .  %>% group_by(ExpFile,Well_coordinate) %>%
+                 top_n(n = 1,
+                       wt = Time_Hrs),
+      aes(label = Well_Flag ),
+      size = 0.2)+ # Original
+  
+  theme_prism()+
+
+  
+  
+    scale_y_continuous(
+
+                    breaks = c(0, 0.2,0.4,0.6,0.8,1),
+                    limits = c(0,1),
+                     labels = c(0, 0.2,0.4,0.6,0.8, 1))+
+   
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title = "Time kill cuvres of lab strain",
+         subtitle = "linear scale",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Condition evaluation")+
+
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+
+
+  facet_wrap_paginate( Abx.con + ExpID  ~Isolate,
+                      ncol =4,
+                      nrow =5,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(plot.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate( Abx.con + ExpID  ~Isolate,
+                      ncol =4,
+                      nrow =5, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   plot.filename,
+   g)
+  
+```
+
+
+# Load AJ select wells
+```{r}
+
+
+selected.wells.path <- paste(wdDir,
+                             "/ASCT_Experimental_Results/ASCT_4.4_ATc_only/ASCT_ATc_AJ_selection.csv",
+                             sep="")
+
+
+AJ.selected.ATc <- read.csv(selected.wells.path )
+
+AJ.selected.ATc <-AJ.selected.ATc %>%
+  mutate(AJ.selected.labstrain.wells = "Keep")
+
+
+Main.Tracking.df.ATc.SUB <- Main.Tracking.df.ATc %>%
+  mutate(ExpID = substr(ExpFile, start = 1, stop = 7))%>%
+  left_join(AJ.selected.ATc, by = c("ExpID",
+                                    "Abx.con",
+                                    "Well_coordinate"))
+
+rm(AJ.selected.ATc)
+
+Main.Tracking.df.ATc.SUB <- Main.Tracking.df.ATc.SUB %>%
+  mutate(AJ.selected.labstrain.wells = ifelse(is.na(AJ.selected.labstrain.wells),
+                                              "Excl",
+                                              AJ.selected.labstrain.wells))
+
+
+
+```
+
+
+```{r}
+ plot.filename <- paste(exp.res.dir,"/ASCT_LabstrainOnly_LIN_AJselected",
+
+          ".pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+
+
+#--- Y axsis ticks
+
+linear_breaks <- c( 0.40,
+                    0.50,
+                    0.60,
+                    0.70,
+                    0.80,
+                    0.90,
+                    1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <-  c( 40,50,60 ,70,80,90, 100)
+#--- 
+
+library(ggrepel)
+gg <- Main.Tracking.df.ATc.SUB%>%
+  mutate(Well_Flag = paste(Well_coordinate,
+                           Flag.label,
+                           sep=" "))%>%
+  filter(Time_Hrs <= 72)%>%
+  filter(Abx.con !="BDQ_20x")%>%
+  ungroup()%>%
+
+ 
+  ggplot(aes(x =Time_Hrs,
+             y = LC.fraction.corr,
+             group = Well_coordinate,
+             label =Well_coordinate,
+             colour = AJ.selected.labstrain.wells,
+             fill = AJ.selected.labstrain.wells))+
+  geom_line( 
+             alpha = 0.50,
+             size = 0.2,
+             stroke = 0,
+             )+
+  
+   scale_color_manual(values= c("Excl"="Black" ,
+                               "Keep"="darkgreen"))+
+     geom_text(data = .  %>% group_by(ExpFile,Well_coordinate) %>%
+                 top_n(n = 1,
+                       wt = Time_Hrs),
+      aes(label = Well_Flag ),
+      size = 0.2)+ # Original
+  
+  theme_prism()+
+
+  
+  
+    scale_y_continuous(
+
+                    breaks = c(0, 0.2,0.4,0.6,0.8,1),
+                    limits = c(0,1),
+                     labels = c(0, 0.2,0.4,0.6,0.8, 1))+
+   
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title = "Time kill cuvres of lab strain",
+         subtitle = "linear scale",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Condition evaluation")+
+
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+
+
+  facet_wrap_paginate( Abx.con + ExpID  ~Isolate,
+                      ncol =4,
+                      nrow =5,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(plot.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate( Abx.con + ExpID  ~Isolate,
+                      ncol =4,
+                      nrow =5, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   plot.filename,
+   g)
+```
+
+```{r}
+ plot.filename <- paste(exp.res.dir,"/ASCT_LabstrainOnly_LOG_AJselected",
+
+          ".pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+
+
+#--- Y axsis ticks
+
+linear_breaks <- c( 0.40,
+                    0.50,
+                    0.60,
+                    0.70,
+                    0.80,
+                    0.90,
+                    1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <-  c( 40,50,60 ,70,80,90, 100)
+
+library(ggrepel)
+gg <- Main.Tracking.df.ATc.SUB%>%
+  mutate(Well_Flag = paste(Well_coordinate,
+                           Flag.label,
+                           sep=" "))%>%
+  filter(Time_Hrs <= 72)%>%
+  filter(Abx.con !="BDQ_20x")%>%
+  ungroup()%>%
+
+ 
+  ggplot(aes(x =Time_Hrs,
+             y = log10(LC.fraction.corr),
+             group = Well_coordinate,
+             label =Well_coordinate,
+             colour = AJ.selected.labstrain.wells,
+             fill = AJ.selected.labstrain.wells))+
+  geom_line( 
+             alpha = 0.50,
+             size = 0.2,
+             stroke = 0,
+             )+
+  
+   scale_color_manual(values= c("Excl"="Black" ,
+                               "Keep"="darkgreen"))+
+     geom_text(data = .  %>% group_by(ExpFile,Well_coordinate) %>%
+                 top_n(n = 1,
+                       wt = Time_Hrs),
+      aes(label = Well_Flag ),
+      size = 0.2)+ # Original
+  
+  theme_prism()+
+
+  
+  
+    scale_y_continuous(
+
+                    breaks = c(0, -0.999,  -1.999),
+                    limits = c(-3,0),
+                     labels = c(100, 10, 1))+
+   
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title = "Time kill cuvres of lab strain",
+         subtitle = "log scale",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Condition evaluation")+
+
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+
+
+  facet_wrap_paginate( Abx.con + ExpID  ~Isolate,
+                      ncol =4,
+                      nrow =5,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(plot.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate( Abx.con + ExpID  ~Isolate,
+                      ncol =4,
+                      nrow =5, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   plot.filename,
+   g)
+  
+```
+
+
+```{r}
+
+library(stringr)
+Mean.Tracking.df.ATc.SUB <- Main.Tracking.df.ATc.SUB %>%
+filter(AJ.selected.labstrain.wells == "Keep")%>%
+  group_by(ExpFile,
+           Abx.con,
+           Isolate,
+           timestep)%>%
+mutate(Mean.LC.fraction.corr = mean(LC.fraction.corr),
+         Mean.Time_Hrs = mean(Time_Hrs))%>%
+  ungroup()%>%
+  filter(Time_Hrs <= 72)%>%
+  select(ExpID,
+         Time.Kill.Definitions,
+         Abx.con,
+         Isolate,   
+         Mean.Time_Hrs,
+         Mean.LC.fraction.corr)%>%
+  distinct()%>%
+  filter(Abx.con !="BDQ_20x")%>%
+    filter(Abx.con !="IPMb_20x")%>%
+mutate(Drug=   sub("_.*", "", Abx.con)  )%>%
+  mutate(Concentration =   sub(".*_", "", Abx.con)  )%>%
+  mutate(Drug = if_else(Drug == "IPMc", "IPM",
+                       if_else(Drug== "MXFb", "MXF",Drug)))%>%
+mutate(Concentration = paste(Concentration,"x MIC of Labstrain",
+                             sep=""))
+
+
+
+
+```
+
+
+```{r}
+plot.filename <- paste(exp.res.dir,"/ASCT_LabstrainOnly_LIN_AJselected_MEAN",
+
+          ".pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+# 9 colours
+library(wesanderson)
+#install.packages("wesanderson")
+pal <- wes_palette("Zissou1", 9, type = "continuous")
+
+# Define color palette for each drug
+drug_colors <- c("AMK" = "deepskyblue4", 
+                 "AZM"= "green4",
+                 "CLO" = "salmon",
+                 "FOX" = "darkred",
+                 "IPM" = "red",
+                 # "IPMb" = "red",
+                 # "IPMc" = "red",
+                 "LZD" = "mediumpurple",
+                "MIN" = "plum",
+                "MXF" = "grey",
+              #  "MXFb" = "grey",
+                "TGC" ="steelblue2")
+#--- Y axsis ticks
+
+linear_breaks <- c( 0.40,
+                    0.50,
+                    0.60,
+                    0.70,
+                    0.80,
+                    0.90,
+                    1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <-  c( 40,50,60 ,70,80,90, 100)
+#--- 
+
+#LC_plottitle <- paste ( "Time kill curves")
+library(ggrepel)
+gg <- Mean.Tracking.df.ATc.SUB %>%
+ 
+  filter(Mean.Time_Hrs <= 72)%>%
+  filter(Abx.con !="BDQ_20x")%>%
+  ungroup()%>%
+
+ 
+  ggplot(aes(x =Mean.Time_Hrs,
+             y = Mean.LC.fraction.corr,
+             group =Drug,
+             label =Drug,
+             colour = Drug,
+             fill = Drug))+
+  geom_line( 
+             alpha = 0.50,
+             size = 1,
+             stroke = 0,
+             )+
+  
+  
+  
+  
+  theme_prism()+
+
+  #scale_colour_prism(palette = "floral")+
+
+   # scale_color_manual(values = drug_colors) +
+  scale_fill_gradientn(colours = pal) + 
+
+    scale_y_continuous(
+
+                    breaks = c(0, 0.2,0.4,0.6,0.8,1),
+                    limits = c(0,1),
+                     labels = c(0, 0.2,0.4,0.6,0.8, 1))+
+   
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title = "Mean time kill kinetics of lab strain",
+         subtitle = "linear scale",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Condition evaluation")+
+
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+
+
+  facet_wrap_paginate( ~Concentration,
+                      ncol =2,
+                      nrow =1,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(plot.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(  ~Concentration,
+                      ncol =2,
+                      nrow =1, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   plot.filename,
+   g)
+```
+
+
+```{r}
+plot.filename <- paste(exp.res.dir,"/ASCT_LabstrainOnly_LOG_AJselected_MEAN",
+
+          ".pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+
+
+# Define color palette for each drug
+drug_colors <- c("AMK" = "deepskyblue4", 
+                 "AZM"= "green4",
+                 "CLO" = "salmon",
+                 "FOX" = "darkred",
+                 "IPM" = "red",
+                 "IPMb" = "red",
+                 "IPMc" = "red",
+                 "LZD" = "mediumpurple",
+                "MIN" = "plum",
+                "MXF" = "grey",
+                "MXFb" = "grey",
+                "TGC" ="steelblue2")
+#--- Y axsis ticks
+
+linear_breaks <- c( 0.40,
+                    0.50,
+                    0.60,
+                    0.70,
+                    0.80,
+                    0.90,
+                    1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <-  c( 40,50,60 ,70,80,90, 100)
+
+
+library(ggrepel)
+gg <- Mean.Tracking.df.ATc.SUB %>%
+ 
+  filter(Mean.Time_Hrs <= 72)%>%
+  filter(Abx.con !="BDQ_20x")%>%
+  ungroup()%>%
+
+ 
+  ggplot(aes(x =Mean.Time_Hrs,
+             y = log10(Mean.LC.fraction.corr),
+             group =Drug,
+             label =Drug,
+             colour = Drug,
+             fill = Drug))+
+  geom_line( 
+             alpha = 0.50,
+             size = 1,
+             stroke = 0,
+             )+
+  theme_prism()+
+  scale_color_manual(values = drug_colors) +
+  scale_y_continuous(
+                    breaks = c(0, -0.999,  -1.999),
+                    limits = c(-3,0),
+                     labels = c(100, 10, 1))+
+   
+   
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title = "Mean time kill kinetics of lab strain",
+         subtitle = "log scale",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Condition evaluation")+
+
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+
+
+  facet_wrap_paginate( ~Concentration,
+                      ncol =2,
+                      nrow =1,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(plot.filename ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(  ~Concentration,
+                      ncol =2,
+                      nrow =1, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   plot.filename,
+   g)
+```
+

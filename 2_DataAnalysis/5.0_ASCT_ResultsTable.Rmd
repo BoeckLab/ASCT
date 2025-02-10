@@ -1,0 +1,364 @@
+
+
+# Aim
+```{r}
+# ==================================================================
+# Summary: Creating a Single Table for GWAS Analysis
+# ==================================================================
+# Aim:
+# This script compiles a single dataset containing:
+# - AUCs (Area Under the Curve) for all isolates (with NDs where isolates were excluded).
+# - Tracking data for population-based GWAS analysis.
+# - Results for both MD.0sd and MD.3sd exclusion thresholds.
+# - Growth exclusion > 0.5 avgArea
+
+# Methodology:
+# - Loads and processes AUC data from multiple files.
+# - Filters out isolates based on predefined exclusion lists.
+# - Merges 0sd and 3sd threshold datasets for comparative analysis.
+# - Applies systematic renaming to maintain consistency across datasets.
+# - Sorts variables systematically to facilitate downstream analysis.
+# - Exports the final table in a structured format.
+
+# Key Outputs:
+# - A consolidated results table containing AUCs, tracking data, and exclusion thresholds.
+# - File naming includes details on exclusion thresholds and date of export.
+
+# Next Steps:
+# - Validate dataset integrity and ensure consistency in exclusion criteria.
+# - Perform GWAS analysis using the compiled dataset.
+# - Further refine growth threshold definitions based on biological relevance.
+
+```
+
+
+# Section 1: Defining variables
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+#Pop data variables
+data.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+
+exp.res.dir <- c(paste(genDir,
+                       "/",
+                       "ASCT_Experimental_Results/ASCT_5_SingleTable_Results",sep=""))
+#Creacting vector with the list of file names
+list.of.filenames.0sd.Growth.Q1Q2 <- list.files(path = data.dir ,
+                            pattern = "*GTManual.HR.R.growth_1_2_Killing_Features_PCAexl_MD.0sd_PCAstr.allLCF_20240321.csv",
+                            full.names = TRUE)
+
+
+
+list.of.filenames.3sd.Growth.Q1Q2 <- list.files(path = data.dir ,
+                            pattern = "*GTManual.HR.R.growth_1_2_Killing_Features_PCAexl_MD.3sd_PCAstr.allLCF_20240321.csv",
+                            full.names = TRUE)
+
+exclude.LB.select.isolates <- "yes" # yes or no
+
+
+growthThrs <-("Growth.Q1Q2") # HR R  or > 0.5 avgArea
+wdDir <- genDir
+
+data.dir <- paste(genDir,"/",data.dir ,sep="")
+
+setwd(wdDir)
+```
+
+
+
+# Section 2: Loading packages
+```{r}
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(stringr)
+```
+
+
+# Section 3: Identifying files to work with
+
+## 3.1 Defning list of isolates 
+```{r}
+# Defining list of isolates 
+
+isol.list.1 <- read.csv(list.of.filenames.0sd.Growth.Q1Q2[1])
+
+isol.list.1 <- isol.list.1 %>%
+  select(Isolate)%>%
+  distinct()
+
+
+
+
+Master.df.0sd <- data.frame(Isolate = isol.list.1$Isolate)
+Master.df.3sd <- data.frame(Isolate = isol.list.1$Isolate)
+
+
+if ( exclude.LB.select.isolates == "yes") {
+  
+  
+  excl.iso <- read.csv(paste(genDir,
+                             "/ASCT_Experimental_Results/ASCT_3.3_BoxPlots_Associations/",
+                             "IsolatesToExclude.csv",
+                             sep=""))
+  
+    excl.iso <-     excl.iso $Isolate
+    
+ 
+   Master.df.0sd<- Master.df.0sd %>%
+      filter(!Isolate %in%   excl.iso)
+   
+   
+   Master.df.3sd<- Master.df.3sd %>%
+      filter(!Isolate %in%   excl.iso)
+   
+   
+   
+}
+
+
+rm(isol.list.1)
+```
+
+# Loading all the 0sd Exlcusion criteria data
+```{r}
+
+i <- list.of.filenames.0sd.Growth.Q1Q2[1]
+for ( i in list.of.filenames.0sd.Growth.Q1Q2 ){ 
+  
+  
+  sub.df <- read.csv(i)
+
+    
+  sub.df <-  sub.df %>%
+  select(Isolate, matches("_Trkv2_Ila2BaSic_AUCrt_0.72h_"),
+         matches("_P.Ila_scvsBaSic_AUCrt_0.72h_"))
+  
+
+    # Extracting column names excluding "Isolate"
+non_isolate_cols <- names(sub.df)[-1]
+
+# Pasting "MD.0sd" to each non-Isolate column name
+new_col_names <- paste("MD.0sd", non_isolate_cols, sep = "_")
+
+
+split_names.TRK <- strsplit(new_col_names, "_")[[1]]
+split_names.POP <- strsplit(new_col_names, "_")[[2]]
+
+
+
+nicer.col.names.TRK <- paste(split_names.TRK[2], #"FOX.20x"
+                         "_",
+                         split_names.TRK[5], #FOX.20x"_"AUCrt" 
+                         split_names.TRK[6],#FOX.20x"_"AUCrt""0.72h"
+                         "_",#FOX.20x"_"AUCrt""0.72h"_
+                         split_names.TRK[1], #FOX.20x"_"AUCrt""0.72h"_MD.0sd
+                         "_",# FOX.20x"_"AUCrt0.72h"_MD.0sd_
+                         growthThrs,#FOX.20x"_"AUCrt0.72h"_MD.0sd_GrowthQ1Q2
+                         "_",
+                         split_names.TRK[3],
+                         ".",# FOX.20x"_"AUCrt0.72h"_MD.0sd_GrowthQ1Q2_Trkv2.Ila2BaSic
+                           split_names.TRK[4],  # FOX.20x_AUCrt0.72h_MD.0sd_GrowthQ1Q2_Trkv2Ila2BaSic
+                         "_",
+                         split_names.TRK[7],
+                         sep="")
+
+nicer.col.names.POP <- paste(split_names.POP[2], #"FOX.20x"
+                         "_",
+                         split_names.POP[5], #FOX.20x"_"AUCrt" 
+                         split_names.POP[6],#FOX.20x"_"AUCrt""0.72h"
+                         "_",#FOX.20x"_"AUCrt""0.72h"_
+                         split_names.POP[1], #FOX.20x"_"AUCrt""0.72h"_MD.0sd
+                         "_",# FOX.20x"_"AUCrt0.72h"_MD.0sd_
+                         growthThrs,#FOX.20x"_"AUCrt0.72h"_MD.0sd_GrowthQ1Q2
+                         "_",
+                         split_names.POP[3],
+                         ".",# FOX.20x"_"AUCrt0.72h"_MD.0sd_GrowthQ1Q2_Trkv2.Ila2BaSic
+                           split_names.POP[4],  # FOX.20x_AUCrt0.72h_MD.0sd_GrowthQ1Q2_Trkv2Ila2BaSic
+                         "_",
+                         split_names.POP[7],
+                         sep="")
+
+
+# Renaming the columns in the dataframe
+names(sub.df)[-1] <- c(nicer.col.names.TRK,nicer.col.names.POP)
+    
+
+
+Master.df.0sd <- left_join( Master.df.0sd ,sub.df,
+                        by = c("Isolate"))
+    
+}
+```
+
+
+```{r}
+for ( i in list.of.filenames.3sd.Growth.Q1Q2 ){ 
+  
+  
+  sub.df <- read.csv(i)
+  
+
+    
+  sub.df <-  sub.df %>%
+  select(Isolate, matches("_Trkv2_Ila2BaSic_AUCrt_0.72h_"),
+         matches("_P.Ila_scvsBaSic_AUCrt_0.72h_"))
+  
+
+# Extracting column names excluding "Isolate"
+non_isolate_cols <- names(sub.df)[-1]
+
+# Pasting "MD.0sd" to each non-Isolate column name
+new_col_names <- paste("MD.3sd", non_isolate_cols, sep = "_")
+
+
+split_names.TRK <- strsplit(new_col_names, "_")[[1]]
+split_names.POP <- strsplit(new_col_names, "_")[[2]]
+
+
+
+nicer.col.names.TRK <- paste(split_names.TRK[2], #"FOX.20x"
+                         "_",
+                         split_names.TRK[5], #FOX.20x"_"AUCrt" 
+                         split_names.TRK[6],#FOX.20x"_"AUCrt""0.72h"
+                         "_",#FOX.20x"_"AUCrt""0.72h"_
+                         split_names.TRK[1], #FOX.20x"_"AUCrt""0.72h"_MD.0sd
+                         "_",# FOX.20x"_"AUCrt0.72h"_MD.0sd_
+                         growthThrs,#FOX.20x"_"AUCrt0.72h"_MD.0sd_GrowthQ1Q2
+                         "_",
+                         split_names.TRK[3],
+                         ".",# FOX.20x"_"AUCrt0.72h"_MD.0sd_GrowthQ1Q2_Trkv2.Ila2BaSic
+                           split_names.TRK[4],  # FOX.20x_AUCrt0.72h_MD.0sd_GrowthQ1Q2_Trkv2Ila2BaSic
+                         "_",
+                         split_names.TRK[7],
+                         sep="")
+
+nicer.col.names.POP <- paste(split_names.POP[2], 
+                         "_",
+                         split_names.POP[5], 
+                         split_names.POP[6],
+                         "_",
+                         split_names.POP[1],
+                         "_",
+                         growthThrs,
+                         "_",
+                         split_names.POP[3],
+                         ".",
+                           split_names.POP[4],  
+                         "_",
+                         split_names.POP[7],
+                         sep="")
+
+
+# Renaming the columns in the dataframe
+names(sub.df)[-1] <- c(nicer.col.names.TRK,nicer.col.names.POP)
+    
+
+
+Master.df.3sd <- left_join( Master.df.3sd ,sub.df,
+                        by = c("Isolate"))
+
+
+rm(nicer.col.names.TRK,
+   nicer.col.names.POP,
+   split_names.TRK,
+   split_names.POP)
+}
+
+
+
+
+```
+
+# Pooling 0sd and 3sd 
+```{r}
+
+
+Master <- left_join(Master.df.0sd,
+                    Master.df.3sd)
+
+
+rm(Master.df.0sd,
+   Master.df.3sd,
+   sub.df)
+
+
+```
+
+
+
+# Sorting out the variables 
+```{r}
+# Get the names of the variables
+variable_names <- names(Master)
+
+# Remove "Isolate" from the variable names
+variable_names <- variable_names[variable_names != "Isolate"]
+
+# Define a custom sorting function
+custom_sort <- function(x) {
+  # Extract the numeric part of the variable names
+  nums <- gsub("\\D", "", x)
+  
+  # Extract the prefix part of the variable names
+  prefixes <- gsub("\\d", "", x)
+  
+  # Order by prefix, then by numbers
+  ord <- order(prefixes, as.numeric(nums))
+  
+  # Return the sorted variable names
+  return(x[ord])
+}
+
+# Sort the variable names using the custom sorting function
+sorted_names <- custom_sort(variable_names)
+
+# Put "Isolate" back at the beginning
+sorted_names <- c("Isolate", sorted_names)
+
+# Reorder the columns in the dataframe
+MasterSORT <- Master[, sorted_names]
+
+
+
+```
+
+# Export table
+```{r}
+# Get today's date
+today <- format(Sys.Date(),"%Y%m%d")
+
+MasterSORT <- MasterSORT %>%
+  mutate(Isolate = if_else(Isolate == "Iso.ATc.19979", "Iso.ATCC19977", Isolate))
+
+
+if ( exclude.LB.select.isolates == "yes") {
+  
+export.filename <-paste(exp.res.dir,
+                "/",
+                "ASCT_ResultsTable_Pop.Trk_AUC0.72h_MD.0.3sd_GrowthThrs.Q1Q1_ExclIso_",
+                   today,
+                   ".csv", sep = "")
+
+} else {
+  
+    
+export.filename <-paste(exp.res.dir,
+                "/",
+                "ASCT_ResultsTable_Pop.Trk_AUC0.72h_MD.0.3sd_GrowthThrs.Q1Q1_",
+                today,
+                ".csv",
+                sep=""
+                )
+  
+}
+
+
+# Format today's date as YYYYMMDD
+write.csv(MasterSORT, 
+        export.filename  ,
+          row.names = FALSE)
+
+```
+

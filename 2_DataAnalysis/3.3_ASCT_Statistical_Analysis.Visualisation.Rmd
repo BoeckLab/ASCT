@@ -1,0 +1,596 @@
+# Aim
+
+```{r}
+# ==============================================================================
+# Script for Statistical Analysis & Visualization of PCA-Excluded Killing Features
+# ==============================================================================
+#
+# Aim:
+# - Analyze and visualize associations between PCA-excluded killing features and 
+#   clinical outcomes (infection clearance vs. persistence) and lung function (FEV1).
+# - Compare statistical significance across different exclusion criteria and 
+#   normalization strategies.
+# - Determine the most informative statistical tests for these associations.
+#
+# Functionality:
+# - **Data Processing:**
+#   - Loads PCA-excluded killing feature datasets for multiple ASCT experiments.
+#   - Filters isolates based on exclusion criteria (optional).
+#   - Merges clinical metadata with killing feature datasets.
+#
+# - **Statistical Analysis:**
+#   - **Non-Parametric Tests:**
+#     - Mann-Whitney/Wilcoxon test (median differences)
+#     - Standard t-test (assumes equal variance)
+#     - Welch t-test (handles unequal variance)
+#   - **Parametric Tests:**
+#     - Pearson correlation (linear association)
+#     - Spearman correlation (rank-based association)
+#     - Linear regression (predictive modeling)
+#   - Adjusts p-values for multiple testing (Bonferroni correction).
+#
+# - **Visualization & Reporting:**
+#   - Generates boxplots comparing clinical outcome groups.
+#   - Labels individual isolates on boxplots for further investigation.
+#   - Highlights statistically significant results.
+#   - Saves structured CSV reports and multi-page PDF visualizations.
+#
+# Expected Outcomes:
+# - Identification of significant killing features associated with infection 
+#   clearance or persistence.
+# - Determination of the most robust statistical test under different exclusions.
+# - Insights into how PCA exclusion strategies impact statistical results.
+#
+# Usage Instructions:
+# - Modify `list.of.experiments.to.analyse` to specify ASCT experiments.
+# - Set `exclude.LB.select.isolates` to `"yes"` or `"no"` for isolate filtering.
+# - Ensure required CSV files are available in the specified directories.
+# - Run the script to process, analyze, and visualize the data.
+#
+# ==============================================================================
+
+```
+
+
+
+# KEY step User input values
+```{r}
+list.of.experiments.to.analyse <- c(
+                     "ASCT.03",
+                    "ASCT.04",
+                    "ASCT.05",
+                     "ASCT.06",
+                     "ASCT.07",
+                     "ASCT.08",
+                     "ASCT.09",
+                    "ASCT.10",# Error when Using excluding Res with day 14 because no isolates are left for statistics
+                     "ASCT.12",
+                     "ASCT.13",
+                     "ASCT.14",
+                     "ASCT.15",
+                     "ASCT.16",
+                     "ASCT.18",
+                     "ASCT.19",
+                     "ASCT.20",
+                    "ASCT.21",
+                    "ASCT.22",
+                    "ASCT.23",
+                    "ASCT.24")
+
+
+today <- format(Sys.Date(), "%Y%m%d")
+
+  
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(stringr)
+
+
+#Section 1: Defining paths and directories 
+genDir <- getwd() 
+exclude.LB.select.isolates <- "no" # yes or no
+
+# loading data from the PCA excluded outlier analysis
+data.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+res.dir <- c("ASCT_Experimental_Results/ASCT_3.3_BoxPlots_Associations")
+
+
+
+wdDir <- genDir
+
+data.dir <- paste(genDir,"/",data.dir ,sep="")
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+
+
+setwd(wdDir)
+
+#---- Define list of NON parametric tests
+list.of.nonparamatric.tests <- c("Welch", "Mann-Whitney/Wilcoxon", "Standard.t.test")
+
+clinical.dir <- file.path(genDir, "..")
+
+# Enter the ASCT.Ranalysis_Exp_Info directory
+clinical.dir <- file.path(clinical.dir , "ASCT.Ranalysis_Exp_Info")
+# Enter the ASCT_CC directory
+clinical.dir <- file.path(clinical.dir , "ASCT_Clinical_Metadata")
+
+clinical.metadata.file <- c("ASCT_3_Clinical_Metadata_forAlex.csv")
+
+
+
+# Section 3:  Loading clincal metadata
+
+
+ Clinical.Metadata.df <- read.csv(paste(clinical.dir,
+                         "/",
+                         clinical.metadata.file,
+                         sep=""))
+
+# Select colunm of interest
+Clinical.Metadata.df <- Clinical.Metadata.df %>%
+  mutate(Isolate = paste("Iso.",
+                         as.character(ID),
+                         sep=""))%>%
+  select(Isolate,
+         Lane,
+         Patient,
+         Treated.for.M..abscessus.infection,
+        cf_status,
+        ATS.defined.NTM.pulmonary.disease.or.treated.for.M..abscessus,
+        OutcomeDef1,
+        FEV1_clearPers,
+        ClearedVSpersistant_ATS)%>%
+  filter(Isolate != "Iso.NA")
+
+
+write.csv(Clinical.Metadata.df,
+          paste(res.dir,
+                "/",
+                "Clinical.metadata.csv",
+                sep=""),
+          row.names = FALSE)
+
+Clinical.Metadata.df <- Clinical.Metadata.df %>%
+  drop_na()
+
+ClinicalMD.KF <- Clinical.Metadata.df
+
+ClinicalMD.KF <- ClinicalMD.KF %>%
+  mutate(ClearedVSpersistant_ATS = as.numeric(ClearedVSpersistant_ATS))%>%
+  mutate(ClearedVSpersistant_ATS = if_else(ClearedVSpersistant_ATS == 2, "Persistant.Inf",
+                                    if_else(ClearedVSpersistant_ATS == 1, "Cleared.Inf" ,"UNKOWN")))
+
+
+```
+
+
+
+# 2.  Loop to assess the association with  outcome across all features
+```{r}
+#please.do <- list.of.experiments.to.analyse[1]
+please.do <-list.of.experiments.to.analyse[1]
+for ( please.do in list.of.experiments.to.analyse ) {
+  
+  Please.analyse <- please.do
+  
+
+
+list.of.kf.data <- list.files(data.dir)
+
+
+
+# Initialize an empty list to store matched elements
+list.of.kf.data.specific <- list()
+
+# Loop through each element in the list
+for (element in list.of.kf.data) {
+  # Check if the element contains any string from the vector
+  if (any(grepl(paste(Please.analyse, collapse = "|"), element))) {
+    list.of.kf.data.specific <- append(list.of.kf.data.specific, list(element))
+  }
+}
+
+# Resulting list with matched elements
+
+
+
+
+list.of.kf.data.specific <- unlist(list.of.kf.data.specific )
+
+list.of.kf.data.specific <- list.of.kf.data.specific[grep(".csv", list.of.kf.data.specific)]
+
+
+# Exluding certain PCA and growth threshold outputs 
+list.of.kf.data.specific <- list.of.kf.data.specific[!grepl("_GT3_1_2_Killing_Features_PCAexl_", list.of.kf.data.specific)]
+list.of.kf.data.specific <- list.of.kf.data.specific[!grepl("_GT6.5_1_2_Killing_Features_PCAexl_", list.of.kf.data.specific)]
+
+
+# Housekeeping
+rm(list.of.kf.data,
+   element)
+
+
+
+# Calculate today's date in the same format (yyyymmdd)
+today_date <- as.Date(format(Sys.Date(), format = "%Y-%m-%d"))
+
+# Extract the dates from the file names
+file_dates <- as.Date(sub(".*_(\\d{8})\\..*", "\\1", list.of.kf.data.specific), format = "%Y%m%d")
+
+# Find the closest date to today's date
+closest_date <- file_dates[which.min(abs(file_dates - today_date))]
+
+# Filter elements with the closest date
+list.of.kf.data.specific <- list.of.kf.data.specific[file_dates == closest_date]
+
+rm(today_date,
+   file_dates,
+   closest_date)
+
+
+
+# Section 2.1: List of Files to apply statistical tests on
+PCAvariable.MAIN <-list.of.kf.data.specific
+
+PCAvariable.MAIN <-grep("_GTManual\\.HR\\.R\\.growth_1_2_Killing_Features_PCAexl_MD\\.3sd_PCAstr\\.allLCF_", PCAvariable.MAIN, value = TRUE)
+
+# Loop through each PCA KF table
+
+PCAvariable.element <- grep("_GTManual\\.HR\\.R\\.growth_1_2_Killing_Features_PCAexl_MD\\.3sd_PCAstr\\.allLCF_", PCAvariable.MAIN, value = TRUE)
+
+  PCAvariable <-PCAvariable.element[1]
+for ( PCAvariable.element in PCAvariable.MAIN ) {
+  
+  PCAvariable <- PCAvariable.element #failed to merge export files
+
+
+  Mahalanobis.def <- ifelse(grepl("MD.2sd",PCAvariable ), "MD.2sd",
+                             ifelse(grepl("MD.3sd", PCAvariable ), "MD.3sd",
+                                      ifelse(grepl("MD.0sd", PCAvariable ), "MD.0sd",
+                                    
+                                    
+                                    "UNKNOWN")))
+
+GT.def <- sub(".*GT(.*?)_.*", "\\1",   PCAvariable)
+
+Norm.def <-  sub("_GT.*", "", PCAvariable)              
+Norm.def <- sub(".*x_", "", Norm.def)  
+PCAstrategy <- str_extract(PCAvariable, "PCAstr\\.(.*?)_")
+PCAstrategy <- gsub("_","",PCAstrategy)
+
+
+
+# Section 3: Loading PCA cureated results (ASCT_2 analysis)
+
+KF.PCAexl.df <- read.csv(paste(data.dir,
+                               "/",
+                                PCAvariable,
+                               sep=""))
+
+
+
+KF.PCAexl.df <-KF.PCAexl.df %>%
+  select(contains("Isolate") | contains("Trkv2_Ila2BaSic_AUCrt_0.72h_"))
+
+if ( exclude.LB.select.isolates == "yes") {
+  
+  excl.iso <- read.csv(paste(res.dir,
+                             "/",
+                             "IsolatesToExclude.csv",
+                             sep=""))
+  
+    excl.iso <-     excl.iso $Isolate
+    
+    KF.PCAexl.df <- KF.PCAexl.df %>%
+      filter(!Isolate %in%   excl.iso)
+}
+
+
+# List of all Killing features
+list.of.Killing.Feautres <- KF.PCAexl.df %>%
+  select(-Isolate)
+
+
+
+KF.PCAexl.df <- melt(KF.PCAexl.df,
+                     id.vars = "Isolate")
+
+
+
+KF.PCAexl.df  <- KF.PCAexl.df  %>%
+    mutate(value = as.character(value))%>%
+  mutate(value =if_else(value == ">72", "72", value),
+                         value)%>%
+  mutate(value = as.numeric(value))%>%
+  drop_na()
+
+KF.PCAexl.df <- dcast(KF.PCAexl.df, Isolate ~variable)
+
+# We identify variables with Inf
+selected_vars <-KF.PCAexl.df  %>%
+  select(where(~any(is.infinite(.))))
+
+
+list.of.Killing.Feautres  <- names(list.of.Killing.Feautres )
+
+
+# Find indices of elements containing "_MDK_"
+indices <- grep("_MDK_", list.of.Killing.Feautres)
+
+if (length(indices) == 0) {
+  # Your code for the "X" case goes here
+  # For example, you can print a message:
+  cat("Indices are empty.\n No MDK results to exclude")
+} else {
+  # Your code for the case when indices are not empty goes here
+  # For example, you can print the indices:
+  cat("Excluding MDK results", indices, "\n")
+  
+    # Remove elements with "_MDK_"
+list.of.Killing.Feautres <- list.of.Killing.Feautres[-indices]
+}
+
+
+  
+# Section 4: Merging clinical metadata with killing features
+ClinicalMD.KF <- left_join(ClinicalMD.KF,
+                           KF.PCAexl.df)
+
+rm(KF.PCAexl.df,
+   selected_vars)
+}}
+
+
+               
+```
+
+# Stats and plots
+```{r}
+
+# Statistics library
+library(rstatix)
+
+ClinicalMD.KF.test <- ClinicalMD.KF
+
+
+ClinicalMD.KF.test<- melt(ClinicalMD.KF.test,
+                     id.vars = c("Isolate",
+                                 "Lane",
+                                 "Patient",
+                                 "Treated.for.M..abscessus.infection",
+                                 "cf_status",
+                                 "ATS.defined.NTM.pulmonary.disease.or.treated.for.M..abscessus",
+                                 "OutcomeDef1",
+                                 "FEV1_clearPers",
+                                 "ClearedVSpersistant_ATS"))
+                     
+ClinicalMD.KF.test <- separate(ClinicalMD.KF.test, col = "variable",
+                                into = c("Abx.con",
+                                         "Tracking.feat.1",
+                                         "Tracking.feat.2",
+                                         "KF.1",
+                                         "KF.2",
+                                         "ExpID"),
+                               sep="_")   
+
+
+ClinicalMD.KF.test <- ClinicalMD.KF.test %>%
+  mutate(Feature = paste(Tracking.feat.1,
+                         Tracking.feat.2,
+                         KF.1,
+                         KF.2,
+                         sep="_"))%>%
+  select(-Tracking.feat.1,
+         -Tracking.feat.2,
+         -KF.1,
+         -KF.2)
+                     
+ClinicalMD.KF.Wilcox.test.rstatix <- ClinicalMD.KF.test %>%
+group_by(ExpID,
+         Abx.con) %>% 
+     wilcox_test(value~ClearedVSpersistant_ATS,
+                 data=.,
+               paired = FALSE,
+                alternative = "two.sided")%>% 
+   adjust_pvalue(method = "bonferroni")%>%
+  add_significance(p.col = "p")%>%
+  mutate(Sample.Size = as.numeric(n1) + as.numeric(n2))%>%
+  mutate(StatTest.Summary.Mann.Whitney_Wilcoxon = paste("Mann.Whitney/Wilcoxon p = ",p,
+                            " (",
+                            p.signif,
+                            ") N=",
+                            Sample.Size,
+                            sep=""))%>%
+  select(ExpID,
+         Abx.con,
+         StatTest.Summary.Mann.Whitney_Wilcoxon)
+
+
+ClinicalMD.KF.Standard.t.test.rstatix <- ClinicalMD.KF.test %>%
+group_by(ExpID,
+         Abx.con) %>% 
+    t_test(value~ClearedVSpersistant_ATS,
+           data=.,
+             paired = FALSE, 
+           var.equal = TRUE,
+           alternative = "two.sided")%>% 
+   adjust_pvalue(method = "bonferroni") %>%
+  add_significance(p.col = "p")%>%
+  mutate(Sample.Size = as.numeric(n1) + as.numeric(n2))%>%
+  mutate(StatTest.Summary.Standard.t.test = paste("t.test p = ",p,
+                            " (",
+                            p.signif,
+                            ") N=",
+                            Sample.Size,
+                            sep=""))%>%
+   select(ExpID,
+         Abx.con,
+         StatTest.Summary.Standard.t.test)
+
+
+
+ClinicalMD.KF.Welch.test.rstatix <- ClinicalMD.KF.test %>%
+group_by(ExpID,
+         Abx.con) %>% 
+    t_test(value~ClearedVSpersistant_ATS,
+           data=.,
+             paired = FALSE, 
+           var.equal = FALSE,
+           alternative = "two.sided")%>% 
+   adjust_pvalue(method = "bonferroni") %>%
+  add_significance(p.col = "p")%>%
+  mutate(Sample.Size = as.numeric(n1) + as.numeric(n2))%>%
+  mutate(StatTest.Summary.Welch.t.test = paste("Welch p = ",p,
+                             " (",
+                            p.signif,
+                            ") N=",
+                            Sample.Size,
+                            sep=""))%>%
+  select(ExpID,
+         Abx.con,
+         StatTest.Summary.Welch.t.test)
+
+  
+
+```
+
+```{r}
+ClinicalMD.KF.Stats <- left_join(ClinicalMD.KF.test,
+                                 ClinicalMD.KF.Standard.t.test.rstatix,
+                                 by = c("ExpID",
+                                        "Abx.con"))
+
+
+ClinicalMD.KF.Stats <- left_join(ClinicalMD.KF.Stats,
+                                   ClinicalMD.KF.Welch.test.rstatix,
+                                 by = c("ExpID",
+                                        "Abx.con"))
+
+
+ClinicalMD.KF.Stats <- left_join(ClinicalMD.KF.Stats,
+                                   ClinicalMD.KF.Wilcox.test.rstatix,
+                                 by = c("ExpID",
+                                        "Abx.con"))
+
+
+rm(ClinicalMD.KF.Welch.test.rstatix,
+   ClinicalMD.KF.Wilcox.test.rstatix,
+   ClinicalMD.KF.Standard.t.test.rstatix)
+```
+
+
+```{r}
+
+
+
+
+ClinicalMD.KF.Stats2 <- melt(ClinicalMD.KF.Stats,
+                     id.vars = c("ExpID",
+                                 "Abx.con",
+                                 "Isolate",
+                                 "Lane",
+                                 "Patient",
+                                 "Treated.for.M..abscessus.infection",
+                                 "cf_status",
+                                 "ATS.defined.NTM.pulmonary.disease.or.treated.for.M..abscessus",
+                                 "OutcomeDef1",
+                                 "FEV1_clearPers",
+                                 "ClearedVSpersistant_ATS",
+                                 "Feature",
+                                 "value"),
+                     variable.name = "Stats_feature",
+                     value.name = "Stats_number")
+
+
+ClinicalMD.KF.Stats2 <-ClinicalMD.KF.Stats2 %>%
+  tidyr::drop_na()
+
+
+library(ggprism)
+```
+
+# Box plot
+
+
+```{r}
+
+
+if ( exclude.LB.select.isolates == "yes") {
+  
+ plot.path <- paste(res.dir,"/","ASCT_Association_ClinicalOutcome_Boxplot_",
+                    "ExlIso_",
+                   today,
+                   ".pdf", sep = "")
+
+} else {
+  
+    
+ plot.path <- paste(res.dir,"/","ASCT_Association_ClinicalOutcome_Boxplot_",
+          
+                   today,
+                   ".pdf", sep = "")
+  
+  
+}
+
+gg <- ClinicalMD.KF.Stats2 %>%
+    filter(Abx.con != "BDQ.20x")%>%
+      arrange(Abx.con)%>%
+    ggplot( aes(x =ClearedVSpersistant_ATS,
+                               y=value,
+                               fill = ClearedVSpersistant_ATS)) +
+    theme_prism()+
+    scale_fill_brewer() +  # Use shades of grey for fill
+
+     geom_boxplot(outlier.shape = NA, alpha = 0.8, size = 0.2) +  # Adjust size of the outline
+         geom_text(aes(label = Isolate), size = 0.3, position = position_jitter(seed = 1, width = 0.3, height = 0)) +  # Add labels for Drug
+
+         geom_jitter(color="black",
+                   # width = 0.1,
+                   size=1, 
+                    alpha=0.2,
+                   stroke = 0,
+                   position = position_jitter(seed = 1, width = 0.3, height = 0)) +
+
+      
+  theme(legend.position = "none")+
+
+   theme(aspect.ratio =1,
+           strip.text = element_text(size = 4),
+              plot.caption = element_text(size = 4))+
+      theme(strip.text = element_text(size = 4))+
+theme(axis.text.x = element_text(size = 4),
+      axis.text.y = element_text(size = 4))+
+  facet_wrap_paginate(Abx.con ~ExpID +Stats_number,
+                      scales = "free",
+             nrow =4,
+             ncol =3,
+             page =1)
+
+
+n <- n_pages(gg)
+
+pdf(plot.path ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(Abx.con ~ExpID +
+            
+               Stats_number, scales = "free",
+              nrow =4,
+             ncol =3,
+             page = i)) 
+}
+dev.off()
+```
+

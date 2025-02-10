@@ -1,0 +1,586 @@
+
+# Aim: 
+```{r}
+# ==================================================================
+# Script for Growth Evaluation and Resistance Classification
+# ==================================================================
+# This R script automates the processing of high-throughput 
+# bacterial growth analysis across multiple ASCT experiments. 
+# It integrates resistance thresholds and growth feature assessments 
+# to classify isolates into growth/no-growth categories.
+#
+# Functionality:
+# - Defines paths and experiment-specific parameters.
+# - Iterates over a list of ASCT experiments and retrieves 
+#   curated growth evaluation data.
+# - Applies manual growth evaluation thresholds to classify isolates 
+#   based on density and area measurements.
+# - Standardizes resistance classification using defined thresholds.
+# - Merges data across replicates to ensure consistency.
+# - Saves curated datasets for downstream resistance analysis.
+#
+# Usage:
+# - Modify `list.of.experiments.for.loop` to specify ASCT experiments.
+# - Choose the type of normalization (`type.of.normalisation.analysis`).
+# - Ensure the required CSV files are present in the specified directories.
+#
+# This script is essential for refining bacterial growth data, 
+# standardizing resistance classifications, and preparing data 
+# for statistical and visualization analyses.
+
+```
+
+
+# Section 1: Defining paths and variables
+```{r setup, include=FALSE}
+# ASCT experiments you wish to curate
+list.of.experiments.for.loop <- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x"
+                                  )
+
+#list.of.experiments.for.loop <- c("ASCT.03_FOX20x")
+
+# 
+# list.of.experiments.for.loop <- c(
+# 
+#                                   "ASCT.21_CLO10x",
+#                                   "ASCT.22_AZM20x"
+#                                   )
+# 
+#  list.of.experiments.for.loop <- c("ASCT.03_FOX20x",
+#                                    "ASCT.05_IPM10x",
+#                                    "ASCT.06_FOX10x",
+#                                    "ASCT.10_IPMb20x",
+#                                   "ASCT.23_IPMc20x")
+# 
+
+
+
+# Working directory
+genDir <- getwd() 
+setwd(genDir)
+
+
+Manual.scDensity.threshold <- log10(0.316227766) # -0.5
+Manual.avgArea.threshold <- log10(3.1622776602) # 0.5
+
+```
+
+
+```{r}
+
+for ( exp.element in list.of.experiments.for.loop ) {
+  
+  
+    exp.ID  <- exp.element 
+  
+  
+
+type.of.normalisation.analysis <- c("Fitnorm") # or "Top2norm"
+start <- Sys.time()
+
+
+data.dir <- paste(genDir,
+                     "/",
+                     "ASCT_Experimental_Results/ASCT_1_curated_variability",
+                     sep="")
+
+
+res.dir <- paste(genDir,
+                     "/",
+                     "ASCT_Experimental_Results/ASCT_1.1_growthThrs",
+                     sep="")
+
+
+# label directory file information to be used in Section 4  clinical isolates list
+# Navigate back one directory (assuming you want to go up one level)
+label_dir <- file.path(genDir, "..")
+
+# Well coordinate code file
+# Enter the ASCT.Ranalysis_Exp_Info directory
+label_dir <- file.path(label_dir , "ASCT.Ranalysis_Exp_Info")
+
+cc.file <- file.path(label_dir,"ASCT_CC" )
+
+
+# Enter the ASCT_CC directory
+label_dir <- file.path(label_dir , "ASCT_Label_directory")
+
+clinical.iso.list.file <- c("ASCT_1_Clinical.iso_list.csv")
+
+
+
+# Section 2: Loading libraries
+
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(reshape2)
+library(scales)
+library(ggExtra)
+
+
+
+# Section 3: Data wrangling
+## 3.1 Identify KF tables to consider
+
+
+list.data.in.data.dir <-list.files(data.dir )
+list.data.in.data.dir <-   grep(".csv", list.data.in.data.dir , value = TRUE)
+list.data.in.data.dir <-   grep(
+                                sub("_(.*)", "", exp.ID)
+                                , list.data.in.data.dir , value = TRUE)
+
+
+### Double check whether it matches the experiment you specified
+
+list.data.in.cc.dir <-list.files(cc.file )
+
+
+list.data.in.cc.dir <-   grep(
+                                sub("_(.*)", "", exp.ID)
+                                , list.data.in.cc.dir, value = TRUE)
+
+CC.df  <- read.csv(paste(cc.file,
+                                "/",
+                                list.data.in.cc.dir,sep=""))
+
+
+
+CC.df <- separate(CC.df, 
+                  col = Condition,
+                  into =c("Drug",
+                          "Concentration",
+                          "Isolate"),
+                  sep= "_")
+
+
+CC.df <-CC.df %>%
+  mutate(ExpFile = (gsub("_CC.csv","",list.data.in.cc.dir)))%>%
+  select(ExpFile,
+         Well_coordinate,
+         Isolate)
+
+rm(list.data.in.cc.dir)
+
+experiment.id <-unique(CC.df$ExpFile)
+
+# Path to load
+growth.file.path <- file.path("..", exp.ID, "Experimental-Results",type.of.normalisation.analysis,paste(experiment.id,"_",type.of.normalisation.analysis,"_GrowthEval_ROCbased.csv",sep=""))
+
+
+GrowthFeature  <- read.csv(growth.file.path)
+
+
+##3.5 Defining growth based on new threshold
+GrowthFeature  <-GrowthFeature %>%
+  mutate(Manual.Growth.Eval.r= if_else(Min.Ratio_n.SC_corr.None <= Manual.scDensity.threshold & Max.R_TotArea_corr.nSCVS <= Manual.avgArea.threshold ,"R",
+                                                         if_else(Max.R_TotArea_corr.nSCVS >= Manual.avgArea.threshold & Min.Ratio_n.SC_corr.None <= Manual.scDensity.threshold , "R",
+                                                                 if_else(Max.R_TotArea_corr.nSCVS >= Manual.avgArea.threshold & Min.Ratio_n.SC_corr.None >= Manual.scDensity.threshold ,"HR", "S"))))
+  
+  
+
+GrowthFeature <- GrowthFeature %>%
+    mutate(GT_Manual.HR.R.growth = if_else(Manual.Growth.Eval == "S", "No-growth", "Growth"),
+         GT_Manual.R.growth = if_else(Manual.Growth.Eval == "R", "Growth", "No-growth"),
+                 GT_Manual.HR.Rr.growth =  if_else(Manual.Growth.Eval.r  == "S", "No-growth", "Growth"))
+
+
+GrowthFeature <- GrowthFeature %>%
+left_join(CC.df)%>%
+  mutate(Isolate = gsub("ATc.19979","Iso.ATc.19979", Isolate))
+
+
+  
+### 3.2.2 Applying Resistance and Heteroresitance threshold
+
+GrowthFeature.v2 <- GrowthFeature %>%
+  ungroup()%>%
+  select(ExpFile,
+         Well_coordinate,
+    
+         Isolate,
+         AI.Growth.Eval,
+        
+       GT_Manual.HR.Rr.growth,
+         GT_Manual.HR.R.growth,
+           GT_Manual.R.growth)
+
+# Condition 1: If 2/3 replicates are labled growth  then the 3rd one is aswell 
+# Condition 2: if 2/3 replicates is  labeled as no-growth then the 3rd is labels a no growth aswell
+GrowthFeature.v2 <- GrowthFeature.v2  %>%
+group_by(ExpFile, Isolate) %>%
+ 
+     mutate(GT_HR.Rr.Manual.Growth.Eval = names(sort(table( GT_Manual.HR.Rr.growth), decreasing = TRUE))[1],
+          GT_HR.R.Manual.Growth.Eval = names(sort(table(   GT_Manual.HR.R.growth), decreasing = TRUE))[1],
+         GT_R.Manual.Growth.Eval = names(sort(table(GT_Manual.R.growth), decreasing = TRUE))[1]) %>%
+  ungroup()
+
+GrowthFeature.v2.export <- GrowthFeature.v2 %>%
+  ungroup()%>%
+ select(ExpFile,
+         Well_coordinate,
+         Isolate,
+        GT_HR.Rr.Manual.Growth.Eval,
+        GT_HR.R.Manual.Growth.Eval,
+        GT_R.Manual.Growth.Eval)
+
+file.export.name <- paste(res.dir,
+                          "/",
+                          exp.ID,
+                          "_GrowthEval-S-HR-R.csv",sep="")
+
+write.csv(GrowthFeature.v2.export,
+      file.export.name ,row.names = FALSE)
+
+
+## 3.2 Load All experiments with the same expID as export to ASCT_1.1
+
+
+list.of.gt.threshold  <- c(
+                          "Manual.HR.R.growth",
+                          "Manual.HR.Rr.growth",
+                          "Manual.R.growth"
+                           )
+
+# Iteratively load the each dataset
+for ( i in list.data.in.data.dir ){
+  
+  subset.df <- read.csv(paste(data.dir,
+                              "/",i,
+                              sep=""))
+  
+  
+  # List of strings to search for in column names
+strings_to_keep <- c("Isolate","P.Ila_scvsBaSic","P.Ila_scBaSic","_Trkv2_Ila2BaSic_")
+
+  # Filter columns with names containing the desired strings using dplyr
+  subset.df <-   subset.df %>%
+  select(matches(paste(strings_to_keep, collapse = "|")))
+
+  
+  for ( j in list.of.gt.threshold ) {
+    
+    if( j  == "6.5" ) {
+      # We do nothing because this KF table has already been curated at 6.5
+      # We therfore just export into results directory but just edit the name
+      
+      path.to.export.filename <- gsub("_1_Killing_Features.csv",
+                                      paste("_GT",j,"_1_Killing_Features.csv",sep = ""),i)
+      
+      path.to.export.filename <- paste(res.dir,
+                                             "/",
+                                             path.to.export.filename,
+                                             sep="")
+      write.csv(subset.df,
+                 path.to.export.filename ,
+                row.names = FALSE)
+      
+      
+    } 
+    
+
+     if ( j ==  "AI.HR.R.growth"){
+      
+      
+      # Find list of isolates defined as growth
+      
+      list.of.growing.isolates <- GrowthFeature.v2 %>%
+        ungroup()%>%
+        filter(GT_HR.R.AI.Growth.Eval  == "Growth")
+      
+      list.of.growing.isolates <-list.of.growing.isolates$Isolate
+      
+      no.growth <- subset.df %>%
+        filter( !(Isolate %in% list.of.growing.isolates))
+        
+      
+       
+      growth.flagged <- subset.df %>%
+        filter( (Isolate %in% list.of.growing.isolates))
+        
+      
+      # Extract variable names (excluding "Isolate")
+    variables_to_replace <- setdiff(names(growth.flagged), "Isolate")
+
+    growth.flagged <- growth.flagged %>%
+  mutate_at(vars(variables_to_replace), ~ NA)
+    
+    Curated.growth <- rbind(no.growth,
+                                growth.flagged)
+        
+        
+      path.to.export.filename <- gsub("_1_Killing_Features.csv",
+                                      paste("_GT",j,"_1_Killing_Features.csv",sep = ""),i)
+      
+      path.to.export.filename <- paste(res.dir,
+                                             "/",
+                                             path.to.export.filename,
+                                             sep="")
+      write.csv(        Curated.growth,
+                 path.to.export.filename ,
+                row.names = FALSE)
+      
+    rm(no.growth,
+       growth.flagged,
+       variables_to_replace)
+    
+
+      
+     }
+    
+     if ( j == "AI.R.growth"){
+      
+      
+      # Find list of isolates defined as growth
+      
+      list.of.growing.isolates <- GrowthFeature.v2 %>%
+        ungroup()%>%
+        filter(GT_R.AI.Growth.Eval  == "Growth")
+      
+      list.of.growing.isolates <-list.of.growing.isolates$Isolate
+      
+      no.growth <- subset.df %>%
+        filter( !(Isolate %in% list.of.growing.isolates))
+        
+      
+       
+      growth.flagged <- subset.df %>%
+        filter( (Isolate %in% list.of.growing.isolates))
+        
+      
+      # Extract variable names (excluding "Isolate")
+    variables_to_replace <- setdiff(names(growth.flagged), "Isolate")
+
+    growth.flagged <- growth.flagged %>%
+  mutate_at(vars(variables_to_replace), ~ NA)
+    
+    Curated.growth <- rbind(no.growth,
+                                growth.flagged)
+        
+        
+      path.to.export.filename <- gsub("_1_Killing_Features.csv",
+                                      paste("_GT",j,"_1_Killing_Features.csv",sep = ""),i)
+      
+      path.to.export.filename <- paste(res.dir,
+                                             "/",
+                                             path.to.export.filename,
+                                             sep="")
+      write.csv(        Curated.growth,
+                 path.to.export.filename ,
+                row.names = FALSE)
+      
+    rm(no.growth,
+       growth.flagged,
+       variables_to_replace)
+    
+
+      
+     }
+    
+    
+     if ( j ==  "Manual.HR.R.growth"){
+      
+      # Find list of isolates defined as growth
+      list.of.growing.isolates <- GrowthFeature.v2 %>%
+        ungroup()%>%
+        filter(GT_HR.R.Manual.Growth.Eval  == "Growth")
+      
+      list.of.growing.isolates <-list.of.growing.isolates$Isolate
+      
+      no.growth <- subset.df %>%
+        filter( !(Isolate %in% list.of.growing.isolates))
+        
+      
+       
+      growth.flagged <- subset.df %>%
+        filter( (Isolate %in% list.of.growing.isolates))
+        
+      
+      # Extract variable names (excluding "Isolate")
+    variables_to_replace <- setdiff(names(growth.flagged), "Isolate")
+
+    growth.flagged <- growth.flagged %>%
+  mutate_at(vars(variables_to_replace), ~ NA)
+    
+    Curated.growth <- rbind(no.growth,
+                                growth.flagged)
+        
+        
+      path.to.export.filename <- gsub("_1_Killing_Features.csv",
+                                      paste("_GT",j,"_1_Killing_Features.csv",sep = ""),i)
+      
+      path.to.export.filename <- paste(res.dir,
+                                             "/",
+                                             path.to.export.filename,
+                                             sep="")
+      write.csv(        Curated.growth,
+                 path.to.export.filename ,
+                row.names = FALSE)
+      
+    rm(no.growth,
+       growth.flagged,
+       variables_to_replace)
+    
+
+      
+     }
+    
+     if ( j == "Manual.R.growth"){
+      
+      
+      # Find list of isolates defined as growth
+      
+      list.of.growing.isolates <- GrowthFeature.v2 %>%
+        ungroup()%>%
+        filter(GT_R.Manual.Growth.Eval  == "Growth")
+      
+      list.of.growing.isolates <-list.of.growing.isolates$Isolate
+      
+      no.growth <- subset.df %>%
+        filter( !(Isolate %in% list.of.growing.isolates))
+        
+      
+       
+      growth.flagged <- subset.df %>%
+        filter( (Isolate %in% list.of.growing.isolates))
+        
+      
+      # Extract variable names (excluding "Isolate")
+    variables_to_replace <- setdiff(names(growth.flagged), "Isolate")
+
+    growth.flagged <- growth.flagged %>%
+  mutate_at(vars(variables_to_replace), ~ NA)
+    
+    Curated.growth <- rbind(no.growth,
+                                growth.flagged)
+        
+        
+      path.to.export.filename <- gsub("_1_Killing_Features.csv",
+                                      paste("_GT",j,"_1_Killing_Features.csv",sep = ""),i)
+      
+      path.to.export.filename <- paste(res.dir,
+                                             "/",
+                                             path.to.export.filename,
+                                             sep="")
+      write.csv(        Curated.growth,
+                 path.to.export.filename ,
+                row.names = FALSE)
+      
+    rm(no.growth,
+       growth.flagged,
+       variables_to_replace)
+    
+
+      
+     }
+    
+      if ( j ==  "Manual.HR.Rr.growth"){
+      
+      
+      # Find list of isolates defined as growth
+      
+      list.of.growing.isolates <- GrowthFeature.v2 %>%
+        ungroup()%>%
+        filter(GT_HR.Rr.Manual.Growth.Eval  == "Growth")
+      
+      list.of.growing.isolates <-list.of.growing.isolates$Isolate
+      
+      no.growth <- subset.df %>%
+        filter( !(Isolate %in% list.of.growing.isolates))
+        
+      
+       
+      growth.flagged <- subset.df %>%
+        filter( (Isolate %in% list.of.growing.isolates))
+        
+      
+      # Extract variable names (excluding "Isolate")
+    variables_to_replace <- setdiff(names(growth.flagged), "Isolate")
+
+    growth.flagged <- growth.flagged %>%
+  mutate_at(vars(variables_to_replace), ~ NA)
+    
+    Curated.growth <- rbind(no.growth,
+                                growth.flagged)
+        
+        
+      path.to.export.filename <- gsub("_1_Killing_Features.csv",
+                                      paste("_GT",j,"_1_Killing_Features.csv",sep = ""),i)
+      
+      path.to.export.filename <- paste(res.dir,
+                                             "/",
+                                             path.to.export.filename,
+                                             sep="")
+      write.csv(        Curated.growth,
+                 path.to.export.filename ,
+                row.names = FALSE)
+      
+    rm(no.growth,
+       growth.flagged,
+       variables_to_replace)
+    
+
+      
+     }
+
+    
+    
+  }
+  
+  
+  
+  
+}
+
+
+end <- Sys.time()
+message("Script started @ " ,start )
+message("Script ended @ " ,end )
+
+
+# Calculate elapsed time in minutes using UTC time zone
+elapsed_time_minutes <- round(as.numeric(difftime(end, start, units = "mins")))
+
+# Print the elapsed time in minutes
+cat("Elapsed time:", elapsed_time_minutes, "minutes\n")
+cat("Perfect! Step 1.1 of the analysis of exp ", exp.ID, "is complete")
+
+
+rm(CC.df,
+   Curated.growth,
+   Growth.df,
+   GrowthFeature,
+   GrowthFeature.v2,
+   GrowthFeature.v2.export,
+   Master.PerWell.df,
+   subset.df,
+   i,
+   j
+   )
+}
+
+
+
+```

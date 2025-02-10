@@ -1,0 +1,495 @@
+# Aim
+```{r}
+# ==================================================================
+# Summary: Growth Evaluation and Analysis of Antibiotic Conditions
+# ==================================================================
+# Aim:
+# This script analyzes bacterial growth under different antibiotic conditions, 
+# with a focus on evaluating single-cell density and total area growth ratios.
+# 
+# Methodology:
+# - Loads and processes experimental growth data.
+# - Integrates well-to-isolate mapping using CC files.
+# - Defines growth thresholds using AI-based and manual approaches.
+# - Classifies wells into "Growth" and "No-growth" categories.
+# - Generates scatter plots to visualize growth evaluation.
+# - Outputs processed datasets and visualizations.
+
+# Key Outputs:
+# - Growth classification table for each experimental condition.
+# - Scatter plots showing AI-based and manually defined growth categories.
+# - CSV files summarizing growth classification results.
+
+# Next Steps:
+# - Validate growth classifications with additional metadata.
+# - Optimize threshold selection for improved classification accuracy.
+# - Explore machine learning-based growth predictions.
+
+```
+
+# Section 1: Defining variables
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+
+#Pop data variables
+data.dir <- c("ASCT_Experimental_Results/ASCT_2_curated_PCA")
+res.dir <- c("ASCT_Experimental_Results/ASCT_4_Figures")
+cc.dir <- c("/Users/Alex/Documents/PhD/PhD_project/PhD_project-Tolerance/R-ANALYSIS/Ranalysis_perwell/Ranalysis_perWell_TLKK/ASCT_Analysis_AJ_orginal/ASCT_EXPERIMENTS_v2-critical/ASCT.Ranalysis_Exp_Info/ASCT_CC")
+exp.res.dir <- c(paste(genDir,
+                       "/",
+                       "ASCT_Experimental_Results/ASCT_4.3_Growth",sep=""))
+wdDir <- genDir
+
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+setwd(wdDir)
+
+# list the experiment directories to pull the tracking data
+
+list.of.drugs<- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+                    
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x",
+                                  "ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x",
+                  "ASCT.24_MXF10x"
+                                  )
+
+
+
+# EDIT the time scale axis that should be used 
+plot.xaxis.time.scale <- c(0,12,24,36,48,60,72)
+
+```
+
+# Section 2: Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+
+today <- format(Sys.Date(), "%Y%m%d")
+
+
+```
+
+## 2.1 Loop through Experimental Results
+```{r}
+
+
+expID <- list.of.drugs[12]
+Growth.df <- data.frame()
+
+
+for ( expID in list.of.drugs ) {
+  
+  Fitnorm <- c("ASCT.04_MXF20x",
+                                  "ASCT.07_TGC20x",
+                                   "ASCT.08_AMK20x",
+                                  "ASCT.09_LZD20x",
+                                  "ASCT.12_BDQ20x",
+                                  "ASCT.13_AMK10x",
+                                  "ASCT.14_MIN20x",
+
+                                  "ASCT.15_CLO20x",
+                                  "ASCT.16_TGC10x",
+                                  "ASCT.18_AZM10x",
+                                  "ASCT.19_LZD10x",
+                                  "ASCT.20_MIN10x",
+                                  "ASCT.21_CLO10x",
+                                  "ASCT.22_AZM20x",
+                                  "ASCT.24_MXF10x"
+                                  )
+
+# Top2norm
+Top2norm <- c("ASCT.03_FOX20x",
+                                  "ASCT.05_IPM10x",
+                                   "ASCT.06_FOX10x",
+                                  "ASCT.10_IPMb20x",
+                                  "ASCT.23_IPMc20x")
+  
+# Check if expID matches any element in Fitnorm or Top2norm
+if (expID %in% Fitnorm) {
+  fitting.or.Top2.norm <- "Fitnorm"
+} else if (expID %in% Top2norm) {
+  fitting.or.Top2.norm <- "Top2norm"
+} else {
+  fitting.or.Top2.norm <- "Not found"
+}
+
+  
+
+
+path.subdir <- paste("Experimental-Results",
+                     sep="")
+
+list.of.pop.data.Dir  <- paste(dirname(normalizePath(wdDir)),
+                                    "/",
+                                   expID,
+                               "/",
+                         path.subdir,
+                         "/",
+                         fitting.or.Top2.norm,
+                                    sep ="")
+  
+  # Load KF.intermediary table
+      Growth.files <- list.files(list.of.pop.data.Dir, pattern = "_GrowthEval_ROCbased.csv", full.names = TRUE)
+
+
+          Growth.df.sub <- read.csv(Growth.files)
+          
+                 Growth.df.sub <- Growth.df.sub %>%
+                   mutate(Abx.con = sub(".*_", "", expID))
+
+  Growth.df <- rbind(  Growth.df ,
+                           Growth.df.sub)
+
+}
+
+
+Growth.df.Final.def <-Growth.df
+Growth.df.melted <- melt(   Growth.df , id.vars = c("ExpFile",
+                                                                      "Well_coordinate",
+                                                    "Abx.con",
+                                                    "Min.Ratio_n.SC_corr.None",
+                                                    "Max.R_TotArea_corr.nSCVS"),
+                                variable.name = "Feature")
+
+rm(Growth.df,
+   Growth.df.sub)
+```
+
+# Load CC file and find which out Well coordinate to isolate
+```{r}
+CC.files <- list.files(cc.dir, pattern = "_CC.csv", full.names = FALSE)
+
+# Set your working directory
+setwd(cc.dir)
+
+# Get a list of CSV files in the directory
+
+# Initialize an empty dataframe to store the combined data
+  Conditions <- data.frame()
+# Loop through each file, read it into R, and combine it with the existing dataframe
+for (file in CC.files ) {
+  setwd(cc.dir)
+  file_path <- file.path(getwd(), file)
+  setwd(cc.dir)
+  data <- read.csv(file_path)
+  
+  data <- data %>%
+    mutate(ExpFile = file_path)%>%
+    mutate(ExpFile = gsub("/Users/Alex/Documents/PhD/PhD_project/PhD_project-Tolerance/R-ANALYSIS/Ranalysis_perwell/Ranalysis_perWell_TLKK/ASCT_Analysis_AJ_orginal/ASCT_EXPERIMENTS_v2-critical/ASCT.Ranalysis_Exp_Info/ASCT_CC/","",ExpFile))%>%
+    mutate(ExpFile = gsub("_CC.csv","",ExpFile))
+  
+   Conditions <- rbind(  Conditions, data)
+}
+
+ 
+  Conditions <- separate(Conditions, col = Condition,
+                      into = c("Abx",
+                               "Concentration",
+                               "Isolate"),
+                      sep="_")
+
+Growth.df.melted <- left_join(Growth.df.melted,
+                              Conditions, 
+                              by = c("ExpFile",
+                                     "Well_coordinate"))
+
+Growth.df.melted <- Growth.df.melted %>%
+  mutate(Feature = gsub(".Growth.Eval", "", Feature))
+
+sort(unique(Growth.df.melted$ExpFile))
+
+
+Growth.df.melted <- Growth.df.melted %>%
+  mutate(Feature = gsub(".Growth.Eval", "", Feature))%>%
+  mutate(Isolate = gsub("Iso.","",Isolate))%>%
+  mutate(ExpFile.Feature = paste(ExpFile,
+                                 Feature,
+                                 sep="_"))
+
+sort(unique(Growth.df.melted$ExpFile.Feature))
+
+rm(data)
+  
+```
+
+```{r}
+# Define custom color palette
+custom_palette <- c("lightgrey", "blue", "black" )
+
+
+  
+plot.path <- paste(exp.res.dir,"/","ASCT_BestGrowthFeature_scatter_MIC-CHECK_",format(Sys.Date(), "%Y%m%d"),".pdf", sep = "")
+
+
+gg <-Growth.df.melted %>%
+ 
+  mutate(minRatio.SingleCell.Density = Min.Ratio_n.SC_corr.None,
+         maxRatio.TotArea_correction.nSCVS = Max.R_TotArea_corr.nSCVS,
+             value = factor(value, levels = c("S", "HR", "R")))%>%
+  ggplot( aes(
+          y =(minRatio.SingleCell.Density) ,
+              x = (maxRatio.TotArea_correction.nSCVS),
+    color =value,
+    group = ExpFile.Feature,
+    label = Isolate))+ 
+
+  scale_color_manual(values = custom_palette) +  # Custom color scale
+
+  geom_point(shape = 20,
+             size = 0.3, 
+             stroke = 0,
+             alpha = 0.2) +
+    
+  geom_text(size = 0.2 , alpha = 0.5) +  # Add labels for Drug
+  geom_vline(aes(xintercept = ifelse(Feature == "AI",
+                                     log10(1.2208106),
+                                     0.5),
+           alpha = 0.25)) +
+
+geom_hline(aes(yintercept = ifelse(Feature == "AI",
+                                   log10(0.286630),
+                                   -0.5),
+           alpha = 0.25)) +
+  scale_x_continuous(limits = c(0, 2), breaks = seq(0, 3, by = 0.2)) +
+  scale_y_continuous(limits = c(-2, 0), breaks = seq(-2, 0, by = 0.2)) +
+
+      labs(color = "growth eval")+  # Customizing legend title
+
+  theme_bw() +
+  theme(plot.title = element_text(size = 4),
+        axis.text.x = element_text(size = 4),
+        axis.text.y = element_text(size = 4),
+        legend.text = element_text(size = 4),
+        legend.key.size = unit(0.5, "lines"),
+        legend.title = element_text(size = 5),
+        plot.caption = element_text(hjust = 0, vjust = 1,size = 8, margin = margin(t = 10)),
+        legend.position = "top") +
+   theme(aspect.ratio = 1)+
+
+ # Add text annotations at specified coordinates
+ facet_wrap_paginate(~ ExpFile + Abx.con + Feature,
+                      ncol =4,
+                      nrow =4,
+                      page =1)
+
+n <- n_pages(gg)
+
+pdf(plot.path  ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg +  facet_wrap_paginate(~ ExpFile + Abx.con + Feature,
+                      ncol =4,
+                      nrow =4,
+                      page =i)) 
+}
+dev.off()
+
+rm(gg)
+
+```
+
+
+```{r}
+
+Manual.scDensity.threshold <- log10(0.316227766) # -0.5
+Manual.avgArea.threshold <- log10(3.1622776602) # 0.5
+
+# Manual.Growth.Eval.r == Bottom left quadrant of scatterplot
+Growth.df.Final.def <- Growth.df.Final.def %>%
+  mutate(Manual.Growth.Eval.r= if_else(Min.Ratio_n.SC_corr.None <= Manual.scDensity.threshold & Max.R_TotArea_corr.nSCVS <= Manual.avgArea.threshold ,"R",
+                                                         if_else(Max.R_TotArea_corr.nSCVS >= Manual.avgArea.threshold & Min.Ratio_n.SC_corr.None <= Manual.scDensity.threshold , "R",
+                                                                 if_else(Max.R_TotArea_corr.nSCVS >= Manual.avgArea.threshold & Min.Ratio_n.SC_corr.None >= Manual.scDensity.threshold ,"HR", "S"))))%>%
+  mutate(GT_AI.HR.R.growth = if_else(AI.Growth.Eval == "S", "No-growth", "Growth"),
+         GT_AI.R.growth = if_else(AI.Growth.Eval == "R", "Growth", "No-growth"))%>%
+      mutate(
+        GT_Manual.HR.Rr.growth =  if_else(Manual.Growth.Eval.r  == "S", "No-growth", "Growth"),
+        GT_Manual.HR.R.growth = if_else(Manual.Growth.Eval == "S", "No-growth", "Growth"),
+        GT_Manual.R.growth = if_else(Manual.Growth.Eval == "R", "Growth", "No-growth"))
+
+Conditions <- Growth.df.melted %>%
+  select(ExpFile,
+         Well_coordinate,
+         Isolate)
+
+
+
+# Condition 2: if 2/3 replicates is  labeled as no-growth then the 3rd is labels a no growth aswell
+Growth.df.Final.def <- Growth.df.Final.def%>%
+  left_join(Conditions )%>%
+  ungroup()%>%
+  distinct()%>%
+
+group_by(ExpFile, Isolate) %>%
+  mutate(GT_HR.R.AI.Growth.Eval = names(sort(table(   GT_AI.HR.R.growth), decreasing = TRUE))[1],
+         GT_R.AI.Growth.Eval = names(sort(table(GT_AI.R.growth), decreasing = TRUE))[1]) %>%
+  
+   mutate(GT_HR.Rr.Manual.Growth.Eval = names(sort(table( GT_Manual.HR.Rr.growth), decreasing = TRUE))[1],
+          GT_HR.R.Manual.Growth.Eval = names(sort(table(   GT_Manual.HR.R.growth), decreasing = TRUE))[1],
+         GT_R.Manual.Growth.Eval = names(sort(table(GT_Manual.R.growth), decreasing = TRUE))[1]) %>%
+  
+  ungroup()
+
+
+Growth.df.Final.def <- Growth.df.Final.def %>%
+select(ExpFile,
+            Abx.con,
+       Isolate,
+       Well_coordinate,
+       Min.Ratio_n.SC_corr.None,
+       Max.R_TotArea_corr.nSCVS,
+       GT_HR.R.AI.Growth.Eval,
+       GT_R.AI.Growth.Eval,
+       GT_HR.Rr.Manual.Growth.Eval,
+       GT_HR.R.Manual.Growth.Eval,
+       GT_R.Manual.Growth.Eval)
+
+
+Growth.df.Final.def2 <-  melt(   Growth.df.Final.def , id.vars = c("ExpFile",
+                                                                      "Well_coordinate",
+                                                                  "Isolate",
+                                                    "Abx.con",
+                                                    "Min.Ratio_n.SC_corr.None",
+                                                    "Max.R_TotArea_corr.nSCVS"),
+                                variable.name = "Feature")
+
+Growth.df.Final.def2 <- Growth.df.Final.def2 %>%
+  ungroup()%>%
+  mutate(Feature = factor(Feature , levels = c("GT_R.Manual.Growth.Eval",
+                                               "GT_HR.R.Manual.Growth.Eval",
+                                               "GT_HR.Rr.Manual.Growth.Eval",
+                                               "GT_R.AI.Growth.Eval",
+                                               "GT_HR.R.AI.Growth.Eval")))%>%
+  mutate(Feature = gsub(".Growth.Eval", "", Feature))%>%
+  mutate(Feature = gsub("GT_", "", Feature))%>%
+  mutate(Threshold.Updated = if_else(grepl("AI", Feature), "AI", 
+                           if_else(grepl("Manual", Feature), "Manual", NA_character_)))%>%
+  mutate(Feature.Updated = sub("Manual." , "",Feature))%>%
+    mutate(Feature.Updated = sub(".Manual" , "",Feature.Updated))%>%
+
+    mutate(Feature.Updated = sub("AI." , "",Feature.Updated ))%>%
+    mutate(Feature.Updated = sub(".AI" , "",Feature.Updated ))%>%
+
+  mutate(Feature.Updated = sub("growth" , "",Feature.Updated ))
+
+
+```
+
+
+# Visualisation
+```{r}
+
+# Define custom color palette
+custom_palette <- c("black",  "red" )
+
+
+  
+plot.path <- paste(exp.res.dir,"/","ASCT_BestGrowthFeature_scatter_MIC-CHECK-GrowthEval_",format(Sys.Date(), "%Y%m%d"),".pdf", sep = "")
+
+
+gg <-Growth.df.Final.def2 %>%
+ mutate(value = as.factor(value))%>%
+  mutate(ExpFile.Feature = paste(ExpFile,
+                                 Feature,
+                                 sep="_"))%>%
+  mutate(minRatio.SingleCell.Density = Min.Ratio_n.SC_corr.None,
+         maxRatio.TotArea_correction.nSCVS = Max.R_TotArea_corr.nSCVS,
+             value = factor(value, levels = c("No-growth", "Growth")))%>%
+  ggplot( aes(
+          y =(minRatio.SingleCell.Density) ,
+              x = (maxRatio.TotArea_correction.nSCVS),
+    color =value,
+    group = ExpFile.Feature,
+    label = Isolate))+ 
+
+  scale_color_manual(values = custom_palette) +  # Custom color scale
+
+  geom_point(shape = 20,
+             size = 0.3, 
+             stroke = 0,
+             alpha = 0.2) +
+   
+  geom_text(size = 0.2 , alpha = 0.5) +  # Add labels for Drug
+  geom_vline(aes(xintercept = ifelse(Threshold.Updated == "AI",
+                                     log10(1.2208106),
+                                     0.5),alpha = 0.25)) +
+
+  geom_hline(aes(yintercept = ifelse(Threshold.Updated == "AI",
+                                   log10(0.286630),
+                                   -0.5),
+           alpha = 0.25)) +
+
+  scale_x_continuous(limits = c(0, 2), breaks = seq(0, 3, by = 0.2)) +
+  scale_y_continuous(limits = c(-2, 0), breaks = seq(-2, 0, by = 0.2)) +
+
+      labs(color = "growth eval")+  # Customizing legend title
+
+  theme_bw() +
+  theme(plot.title = element_text(size = 4),
+        axis.text.x = element_text(size = 4),
+        axis.text.y = element_text(size = 4),
+        legend.text = element_text(size = 4),
+        legend.key.size = unit(0.5, "lines"),
+        legend.title = element_text(size = 5),
+        plot.caption = element_text(hjust = 0, vjust = 1,size = 8, margin = margin(t = 10)),
+        legend.position = "top") +
+   theme(aspect.ratio = 1)+
+
+ # Add text annotations at specified coordinates
+ facet_wrap_paginate(~ ExpFile + Abx.con + Threshold.Updated + Feature.Updated,
+                      ncol =5,
+                      nrow =4,
+                      page =1)
+
+n <- n_pages(gg)
+
+pdf(plot.path  ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg +  facet_wrap_paginate(~ ExpFile + Abx.con + Threshold.Updated + Feature.Updated,
+                      ncol =5,
+                      nrow =4,
+                      page =i)) ## WORKS with 240 wells ## I think Error: Cannot create zero-length unit vector ("unit" subsetting) means it does not know how to plot the remianing 2 wells on the last page given ncol 4 and nrow 6
+}
+dev.off()
+
+rm(gg)
+
+```
+
