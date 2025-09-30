@@ -5,7 +5,6 @@ Testing (ASCT) analysis. The demonstration pipeline can be found in the
 `Nature_microbiology_DemoPipeline` directory.
 
 ## Data Availability
-
 Because the raw experimental data are extremely large (approximately 7 TB per 
 experiment, with multiple experiments conducted), it is not feasible to share the 
 complete dataset via GitHub. To address this, we provide a demonstration pipeline 
@@ -16,13 +15,18 @@ The ASCT image analysis algorithms and image data are substantial in size and
 cannot be hosted directly on GitHub. For peer review, they are freely accessible 
 via Switchdrive at the following link:
 
-[Data Access Link](https://drive.switch.ch/index.php/s/HBJWwTGwqe2AhWW)
+[Data Access via Switchdrive](https://drive.switch.ch/index.php/s/HBJWwTGwqe2AhWW)
+
+As an alternative, the same demonstration pipeline can also be accessed via Zenodo 
+using the following private preview link:
+
+[Data Access via Zenodo](https://zenodo.org/records/17232777?preview=1&token=eyJhbGciOiJIUzUxMiJ9.eyJpZCI6ImY1YzA2ZWEwLWY1ZjctNDNjZS1iNGQ3LTI1MDY4NzAwNDM1NiIsImRhdGEiOnt9LCJyYW5kb20iOiIxODViNGRjZWQxOTIyYTYyY2JjNjI3MDJkNzcwYzFkYSJ9.9B7dAQJgVsURIw8ob2dbEz7a22ZtdemedgsN7pbysrhNv0tpLSzr2g2rcHWVb4fAjj7iyQ1SBnsNaiy0tVwOZQ)
 
 To ensure long-term accessibility, we are also preparing a deposition of these 
-files in a permanent repository (Zenodo), where they will be assigned a DOI. 
-The DOI will be provided here once available.
+files in a permanent repository (Zenodo), where they will be assigned a DOI once 
+the dataset is formally published. The DOI will be provided here once available.
 
-Users may download the dataset and algorithms from this link to reproduce the 
+Users may download the dataset and algorithms from these links to reproduce the 
 analyses described in the demonstration pipeline.
 
 # Repository Structure
