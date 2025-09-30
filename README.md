@@ -12,11 +12,15 @@ complete dataset via GitHub. To address this, we provide a demonstration pipelin
 that illustrates, step by step, how a single field image and a single condition 
 are processed and analyzed.
 
-The ASCT image analysis algorithms and image data are also substantial in size 
-and cannot be hosted directly on GitHub. They are, however, freely available at 
-the following location:
+The ASCT image analysis algorithms and image data are substantial in size and 
+cannot be hosted directly on GitHub. For peer review, they are freely accessible 
+via Switchdrive at the following link:
 
 [Data Access Link](https://drive.switch.ch/index.php/s/HBJWwTGwqe2AhWW)
+
+To ensure long-term accessibility, we are also preparing a deposition of these 
+files in a permanent repository (Zenodo), where they will be assigned a DOI. 
+The DOI will be provided here once available.
 
 Users may download the dataset and algorithms from this link to reproduce the 
 analyses described in the demonstration pipeline.
