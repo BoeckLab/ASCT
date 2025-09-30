@@ -1,7 +1,21 @@
 
-## Data Access
+# ASCT Image Analysis Pipeline (Demonstration)
 
-The ASCT image analysis algorithms and image data are substantial in size and cannot be hosted directly on GitHub.  
-For peer review, they are freely accessible via Switchdrive at the following link:
+Because the raw experimental data are extremely large (approximately **7 TB per experiment**, with multiple experiments conducted), it is not feasible to share the complete dataset via GitHub. Due to GitHub’s size limitations, the full data cannot be uploaded here.  
 
-🔗 [Access Data on Switchdrive](https://drive.switch.ch/index.php/s/HBJWwTGwqe2AhWW)
+To address this, we provide a **demonstration pipeline** that illustrates, step by step, how a **single field image** and a **single condition** are processed and analyzed.
+
+## Access to Algorithms, Data, and Code
+
+The ASCT image analysis algorithms, image data, and code are substantial in size and cannot be hosted directly on GitHub.  
+All necessary resources are freely accessible via Switchdrive at the following link:
+
+🔗 [Access Data, Code, and Algorithms on Switchdrive](https://drive.switch.ch/index.php/s/HBJWwTGwqe2AhWW)
+
+## Installation and Execution Instructions
+
+Detailed instructions on **installation** and **how to execute the pipeline** are provided in the accompanying PDF:
+
+📄 *NMICROBIOL-25031020A_nt_Code_and_software_submission_checklist.pdf*
+
+Please download the PDF from this repository and follow the step-by-step guidance for setting up required software (Fiji, ilastik, MATLAB, and R), running the demonstration pipeline, and performing downstream data analysis.
