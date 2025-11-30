@@ -20,7 +20,7 @@ via Switchdrive at the following link:
 As an alternative, the same demonstration pipeline can also be accessed via Zenodo 
 using the following private preview link:
 
-[Data Access via Zenodo](https://doi.org/10.5281/zenodo.172327)
+[Data Access via Zenodo]([https://doi.org/10.5281/zenodo.172327](https://doi.org/10.5281/zenodo.17232777)
 
 To ensure long-term accessibility, we are also preparing a deposition of these 
 files in a permanent repository (Zenodo), where they will be assigned a DOI once 
