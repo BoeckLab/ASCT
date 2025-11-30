@@ -17,14 +17,9 @@ via Switchdrive at the following link:
 
 [Data Access via Switchdrive](https://drive.switch.ch/index.php/s/HBJWwTGwqe2AhWW)
 
-As an alternative, the same demonstration pipeline can also be accessed via Zenodo 
-using the following private preview link:
+As an alternative, the same demonstration pipeline can also be accessed via Zenodo:
 
-[Data Access via Zenodo](https://doi.org/10.5281/zenodo.17232777)
-
-To ensure long-term accessibility, we are also preparing a deposition of these 
-files in a permanent repository (Zenodo), where they will be assigned a DOI once 
-the dataset is formally published. The DOI will be provided here once available.
+The files have now been deposited in a permanent repository (Zenodo) and assigned a DOI. The template dataset, analysis algorithm and code can be accessed at: [Data Access via Zenodo DOI](https://doi.org/10.5281/zenodo.17232777).
 
 Users may download the dataset and algorithms from these links to reproduce the 
 analyses described in the demonstration pipeline.
