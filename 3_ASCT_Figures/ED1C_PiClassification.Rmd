@@ -1,0 +1,513 @@
+---
+title: "ASCT_Val3.2_POC"
+output: html_document
+date: "2024-08-02"
+---
+
+# ================================================================
+# Aim
+# ================================================================
+# Validate the performance of the ilastik-based PI-positivity classifier
+# by comparing predicted labels against manually curated ground truth
+# and quantifying:
+#   - confusion matrix metrics (accuracy, sensitivity, specificity, etc.),
+#   - ROC curve and AUC,
+#   - precision–recall behaviour across decision thresholds.
+#
+# Functionality:
+# - Loads ground-truth PI labels (User.Label) and corresponding ASCT
+#   model predictions on matched single-cell objects.
+# - Exports a list of all discrepant annotations for manual re-checking.
+# - Computes full caret confusion matrix statistics and writes a
+#   text report.
+# - Generates ROC and precision–recall curves with AUC / threshold sweep
+#   to characterise classifier robustness.
+
+# 1. Define variables
+```{r}
+
+
+info.wdDir <- getwd()
+info.resDir <- paste(info.wdDir,
+                     "/Results",
+                     sep ="")
+
+#---- Path to ASCT test data
+  ## Go back one level from the current working directory
+  setwd("..")
+
+  ## Change to the ASCT_nd2_images/ASCT_FL_images directory
+  setwd("ASCT_nd2_images/ASCT_FL_images")
+
+  ## Get the current working directory
+  info.testDir <- getwd()
+  setwd(info.wdDir)
+  
+  
+#---- Path to GT data
+ setwd("..")
+
+  ## Change to the ASCT_nd2_images/ASCT_FL_images directory
+  setwd("Ilastik_GT_Algorithms")
+  
+    info.gtDir <- getwd()
+    setwd(info.wdDir)
+
+```
+
+# 2. load libraries
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(wesanderson)
+
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+
+library(ggExtra)
+
+
+library(grid)  # Load the grid package allows you to add text to pages in ggplot
+
+# For classification assement
+library(caret)
+```
+
+# 3. Load data
+## 3.1 Ground truth 
+```{r}
+GT.df <- data.frame()
+
+  
+
+  # List all files in the current directory
+    files <- list.files(info.gtDir)
+    
+    # Filter files that end with 'ASCTassociation.csv'
+    csv_files <- files[grep("_FLcorr-exported_data_table.csv$", files)]
+  #  csv_file <- csv_files[1]
+  # Loop through each of the CSV files and read them
+  for (csv_file in csv_files) {
+    
+      setwd(info.gtDir)
+    # Read the CSV file
+    GT.df.sub <- read.csv(csv_file)
+     GT.df.sub <- GT.df.sub %>%
+       mutate(ExpID = csv_file)%>%
+       filter(User.Label != "0")
+    # Combine the data from the CSV file with the main data frame
+    GT.df <- rbind(GT.df, GT.df.sub)
+  
+  rm(GT.df.sub)
+  
+  }
+
+#Houskeeping
+    rm(csv_file,
+       csv_files)
+
+GT.df <- GT.df %>%
+  mutate(GT = User.Label)%>%
+  mutate(ExpID = gsub("_FLcorr-exported_data_table.csv","",ExpID),
+         ExpID = gsub("POCgt_","", ExpID))%>%
+  select(ExpID,
+    labelimage_oid,
+         
+         timestep,
+         GT,
+    Probability.of.piNeg,
+          Center.of.the.object_1,
+          Center.of.the.object_0
+    )
+```
+
+## 3.2  ASCT data
+```{r}
+Test.df <- data.frame()
+
+  
+  setwd(info.testDir)
+  # List all files in the current directory
+    files <- list.files(info.testDir)
+    
+    # Filter files that end with 'ASCTassociation.csv'
+    csv_files <- files[grep("_FLcorr_table.csv$", files)]
+  
+  # Loop through each of the CSV files and read them
+  for (csv_file in csv_files) {
+    # Read the CSV file
+    Test.df.sub <- read.csv(csv_file)
+        Test.df.sub <-Test.df.sub %>%
+      mutate(ExpID = csv_file)
+    
+    # Combine the data from the CSV file with the main data frame
+    Test.df <- rbind(Test.df, Test.df.sub)
+  
+  rm(Test.df.sub)
+  
+  }
+
+#Houskeeping
+    rm(csv_file,
+       csv_files)
+```
+
+
+```{r}
+Test.df <- Test.df %>%
+    mutate(ExpID = gsub("_FLcorr_table.csv","",ExpID),
+         ExpID = gsub("POC-","", ExpID))%>%
+  mutate(PREDICTED.Probability.of.piNeg = Probability.of.piNEG)%>%
+  select(ExpID,
+         labelimage_oid,
+         timestep,
+         Predicted.Class,
+         PREDICTED.Probability.of.piNeg,
+        Center.of.the.object_1,
+         Center.of.the.object_0)
+```
+
+# 4. Merge data
+```{r}
+#Joining with `by = join_by(timestep, labelimage_oid, Center.of.the.object_0, Center.of.the.object_1, Field, Exp, Well_coordinate)`
+
+
+
+Main.df <- left_join(GT.df,
+                     Test.df,
+                     by = c("ExpID",
+                            "labelimage_oid",
+                            "timestep",
+                           "Center.of.the.object_1",
+                            "Center.of.the.object_0"
+                            ))
+
+
+Main.df <- Main.df %>%
+  drop_na()
+
+
+
+Main.df <- Main.df %>%
+  mutate(Predicted.Class = if_else(Predicted.Class == "piNEG", "piNeg",
+                                   if_else(Predicted.Class == "piPOS", "piPos",Predicted.Class)))
+
+Main.df.ROCanalysis <- Main.df
+
+
+```
+
+
+
+
+##  Method 2: caret
+```{r}
+
+
+pred <- factor(Main.df$Predicted.Class)
+ref <-  factor(Main.df$GT)
+#Creating confusion matrix
+Pi.Classification.res <- confusionMatrix(data=pred, 
+                           reference =ref )
+
+#Display results 
+
+
+# Extracting the confusion matrix and statistics as a character vector
+conf_matrix_text <- capture.output(print(Pi.Classification.res))
+
+# Extract overall statistics
+overall_stats <- Pi.Classification.res$overall
+overall_stats_text <- capture.output(print(overall_stats))
+
+# Extract class-specific statistics
+class_stats <- Pi.Classification.res$byClass
+class_stats_text <- capture.output(print(class_stats))
+
+# Define additional text
+additional_text <- c(
+  "Analysis of the Pi-classification Results",
+  "-------------------------------------",
+  "The confusion matrix and related statistics provide insight into the performance of the classification model.",
+  "It highlights the accuracy, sensitivity, specificity, and other relevant metrics that help in evaluating the model's effectiveness.",
+  "-----",
+  "Number of manually labelled (groundtruth) objects:",  # Adding a new line
+  paste("piNeg: ", as.numeric(piNeg_count),sep=""),
+  paste("piPos: ", as.numeric(piPos_count),sep=""),
+  "",
+  paste("total: ", as.numeric(piNeg_count+piPos_count),sep=""),
+  "-----",
+  "List of images that were manually labelled:",
+  "",
+  unique(Main.df$ExpID),
+  "-----"
+
+)
+
+
+
+
+# Combine additional text with the confusion matrix output and statistics
+output_text <- c(
+  additional_text,
+  conf_matrix_text,
+  "",  # Adding a new line
+  "Overall Statistics:",
+  overall_stats_text,
+  "",  # Adding a new line
+  "Class-specific Statistics:",
+  class_stats_text)
+
+res.txt <- paste(info.resDir,
+                       "/",
+                       "ASCT_PIclassification_Validation_Results_",
+                       
+                       today ,
+                       ".txt",sep="")
+# Write the combined text to a text file
+writeLines(output_text, res.txt )
+
+
+print(output_text)
+
+```
+
+
+# ROC curve 
+```{r}
+library(pROC)
+
+true_labels <- Main.df.ROCanalysis$GT  # actual labels (1 = positive, 0 = negative)
+predicted_probabilities <- Main.df.ROCanalysis$PREDICTED.Probability.of.piNeg  # predicted probabilities
+
+#define object to plot and calculate AUC
+rocobj <- roc(true_labels , 
+             predicted_probabilities)
+
+
+auc <- round(auc(true_labels, predicted_probabilities),4)
+
+
+ggroc2 <- function(roc, showAUC = TRUE, interval = 0.2, breaks = seq(0, 1, interval)){
+  require(pROC)
+  if(class(roc) != "roc")
+    simpleError("Please provide roc object from pROC package")
+  plotx <- rev(roc$specificities)
+  ploty <- rev(roc$sensitivities)
+  
+  ggplot(NULL, aes(x = plotx, y = ploty)) +
+    geom_segment(aes(x = 0, y = 1, xend = 1,yend = 0),size = 1 ,alpha = 0.5) + 
+    geom_step(color = "red", size = 1) +
+    theme_prism()+
+    scale_x_reverse(name = "Specificity",limits = c(1,0), breaks = breaks, expand = c(0.001,0.001)) + 
+    scale_y_continuous(name = "Sensitivity", limits = c(0,1), breaks = breaks, expand = c(0.001, 0.001)) +
+    #theme_bw() + 
+    theme(axis.ticks = element_blank()) +
+    coord_equal() + 
+    annotate("text", x = interval/2, y = interval/2, vjust = -3, hjust =1, label = paste("AUC =",sprintf("%.4f",roc$auc)))
+}
+
+
+Plot.filepath <- paste(info.resDir,
+                       "/",
+                       "ASCT_PIclassification_Validation_Results_ROCcurve_",
+                       
+                       today ,
+                       ".pdf",sep="")
+pdf(Plot.filepath)
+ggroc2(rocobj)
+
+dev.off()
+
+rm(rocobj)
+```
+
+# Precision recall curve analysis across ranges
+```{r}
+
+
+Precision.Recall.df <- Main.df.ROCanalysis %>%
+  select(ExpID,
+         labelimage_oid,
+         timestep,
+         GT,
+         Predicted.Class,
+         PREDICTED.Probability.of.piNeg)
+str(Precision.Recall.df)
+
+list.of.threshold <- seq(0, 1, by = 0.05)
+
+for ( thrs in list.of.threshold ) {
+  
+  Precision.Recall.df
+  
+  
+  
+  
+  
+}
+
+
+
+```
+
+
+
+```{r}
+# Define a set of thresholds from 0 to 1
+thresholds <- seq(0, 1, length.out = 50)
+
+# Initialize vectors to store precision, recall, and thresholds
+precision_vals <- numeric(length(thresholds))
+recall_vals <- numeric(length(thresholds))
+
+# Convert GT to binary (if not done already)
+Precision.Recall.df$GT_binary <- ifelse(Precision.Recall.df$GT == "piNeg", 1, 0)
+
+# Loop over thresholds and compute precision and recall
+for (i in seq_along(thresholds)) {
+  threshold <- thresholds[i]
+  
+  # Predicted classes based on the threshold
+  predicted_class <- ifelse(Precision.Recall.df$PREDICTED.Probability.of.piNeg >= threshold, 1, 0)
+  
+  # Compute confusion matrix components
+  true_positives <- sum(predicted_class == 1 & Precision.Recall.df$GT_binary == 1)
+  false_positives <- sum(predicted_class == 1 & Precision.Recall.df$GT_binary == 0)
+  false_negatives <- sum(predicted_class == 0 & Precision.Recall.df$GT_binary == 1)
+  
+  # Compute precision and recall
+  precision_vals[i] <- true_positives / (true_positives + false_positives)
+  recall_vals[i] <- true_positives / (true_positives + false_negatives)
+}
+
+# Create a data frame for precision, recall, and thresholds
+pr_df <- data.frame(Threshold = thresholds, Precision = precision_vals, Recall = recall_vals)
+
+
+# Plot Precision-Recall curve with color representing the threshold
+ggPrecisionRecall <- ggplot(pr_df, aes(color = Threshold)) +
+  geom_path(aes(Recall, Precision)) + # connect the points in the order in which they appear in the data to form a curve
+
+  # Use the Zissou1 palette from Wes Anderson
+  scale_color_gradientn(colors = wes_palette("Zissou1", n = 100, type = "continuous"), 
+                        values = scales::rescale(c(0, 0.5, 1)), 
+                        breaks = seq(0, 1, by = 0.1),  # Tick marks at intervals of 0.1
+                        guide = "colorbar") +
+  
+  # Set x and y axes to range from 0 to 1, intervals of 0.2, and remove tick marks
+  scale_x_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, by = 0.1)) +
+  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, by = 0.1)) +
+  
+  # Add labels and title
+  labs(title = "Precision-Recall Curve with Thresholds", x = "Recall", y = "Precision") +
+  
+  # Use the theme_prism with adjustments for no tick marks and axis intervals
+  theme_prism(base_line_size = 8/14) +
+    # Fix the aspect ratio to 1
+  coord_fixed(ratio = 0.5)+
+  theme(legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        axis.ticks = element_blank())  # Remove ticks
+
+# Define the file path for saving the plot
+Plot.filepath <- paste(info.resDir,
+                       "/", 
+                       "ASCT_PIclassification_Validation_Results_PrecisionRecall_Curve_", 
+                       today, 
+                       ".pdf", sep="")
+
+# Export the plot as a PDF in portrait orientation
+ggsave(Plot.filepath, plot = ggPrecisionRecall, device = "pdf", width = 6, height = 8)
+
+```
+
+
+
+```{r}
+
+
+
+pr_df %>%
+  arrange(Threshold) %>% # this step is not strictly necessary here because the rows are already ordered by `.threshold`
+  ggplot() +
+  geom_path(aes(Recall, Precision)) + # connect the points in the order in which they appear in the data to form a curve
+  coord_equal()
+
+
+
+```
+
+
+```{r}
+pr.curve(pr_df)
+```
+
+
+```{r}
+library(precrec)
+
+# Load a test dataset
+
+```
+
+```{r}
+# ---------------------------------------------------------------------------
+# Two class example
+
+# `truth` is a 2 level factor. The first level is `"Class1"`, which is the
+# "event of interest" by default in yardstick. See the Relevant Level
+# section above.
+data(two_class_example)
+
+# Binary metrics using class probabilities take a factor `truth` column,
+# and a single class probability column containing the probabilities of
+# the event of interest. Here, since `"Class1"` is the first level of
+# `"truth"`, it is the event of interest and we pass in probabilities for it.
+pr_curve(two_class_example, truth, Class1)
+
+# ---------------------------------------------------------------------------
+# `autoplot()`
+
+# Visualize the curve using ggplot2 manually
+library(ggplot2)
+library(dplyr)
+pr_curve(two_class_example, truth, Class1) %>%
+  ggplot(aes(x = recall, y = precision)) +
+  geom_path() +
+  coord_equal() +
+  theme_bw()
+
+
+# Or use autoplot
+autoplot(pr_curve(two_class_example, truth, Class1))
+
+
+# Multiclass one-vs-all approach
+# One curve per level
+hpc_cv %>%
+  filter(Resample == "Fold01") %>%
+  pr_curve(obs, VF:L) %>%
+  autoplot()
+
+
+# Same as above, but will all of the resamples
+hpc_cv %>%
+  group_by(Resample) %>%
+  pr_curve(obs, VF:L) %>%
+  autoplot()
+
+
+
+```
+

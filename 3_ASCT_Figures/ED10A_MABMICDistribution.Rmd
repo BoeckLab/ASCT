@@ -1,0 +1,688 @@
+---
+title: "ASCT kill curves histogram"
+output: html_document
+date: "2024-04-20"
+---
+
+# ================================================================
+# Aim
+# ================================================================
+# Visualise the distribution of MICs across M. abscessus isolates and
+# relate MIC values to clinical treatment outcomes.
+#
+# This script:
+# - Loads MIC values and ATS clinical outcome categories (cleared vs
+#   persistent vs unknown) for all isolates and antibiotics.
+# - Recodes outcome labels, counts isolates per MIC, and computes, for
+#   each antibiotic and outcome class, the percentage of isolates at
+#   each MIC.
+# - Fills gaps in MIC dilution series (per antibiotic / outcome) so that
+#   missing concentrations appear as zero-count bins.
+# - Converts MICs from log2 scale to µg/ml and harmonises dynamic ranges
+#   using antibiotic-specific MIC ranges from an external metadata table.
+# - Constructs dual-axis faceted histograms:
+#     • primary y-axis: number of isolates at each MIC (bar height),
+#     • secondary y-axis: percentage of isolates per outcome category at
+#       each MIC (overlaid lines and points).
+# - Generates alternative views with:
+#     • full MIC dynamic range per antibiotic,
+#     • reduced / free MIC ranges,
+#     • exclusion of BDQ and RFB to focus on remaining antibiotics.
+# - Exports the resulting figures (per-antibiotic MIC histograms with
+#   outcome overlays) as multi-panel PDFs for inclusion in ASCT kill
+#   curve analyses.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Definig paths
+```{r}
+wdDir <- getwd()
+
+setwd(wdDir)
+resDir <- paste(wdDir,
+                "/",
+                "Result_Fig",
+                sep="")
+
+dataDir <- paste(wdDir,
+                "/",
+                "ASCT_Data",
+                sep="")
+
+mic.sub.range <- paste(wdDir,
+                "/",
+                "Info/Ranges_of_MIC_to_use_subset.xlsx",
+                sep="")
+
+```
+
+# Load libraries
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+#install.packages("ggExtra")
+library(ggExtra)
+library(readxl)
+library(reshape2)
+
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+
+
+
+```
+
+# Loading Data
+```{r}
+#MIC
+MIC.df <- read.csv("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCT/ASCT_Figures/ASCT_Main_Data/MainPhenotypes_ASCTpaper.csv")
+
+MIC.df <-MIC.df %>%
+   select(matches("_MIC_|Isolate|ClearedVSpersistant_ATS"))
+
+MIC.df <- melt(MIC.df ,
+               id.vars = c("Isolate",
+                           "ClearedVSpersistant_ATS"),
+                variable.name = "Abx.con",
+               value.name = "MIC")
+
+MIC.df <- MIC.df %>%
+  mutate(ClearedVSpersistant_ATS = if_else(is.na(ClearedVSpersistant_ATS), 3, ClearedVSpersistant_ATS))#Category 3 means Unkown outcome
+
+
+
+Outcome.df <- MIC.df %>%
+
+  select(Isolate,
+         ClearedVSpersistant_ATS)%>%
+  drop_na()%>%
+  distinct()
+
+MIC.df <-MIC.df %>%
+  select(Isolate,
+         Abx.con,
+         MIC)%>%
+  drop_na()
+
+
+
+MIC.Single.barplot.df <- MIC.df
+```
+
+
+```{r}
+MIC.outcome.df <-left_join(Outcome.df,
+                           MIC.df)
+
+MIC.outcome.df <-MIC.outcome.df %>%
+mutate(ClearedVSpersistant_ATS = if_else(ClearedVSpersistant_ATS == 1, "Persistant",
+                                    if_else(ClearedVSpersistant_ATS == 0, "Cleared" ,"Unkown")))
+
+
+MIC.outcome.df <-MIC.outcome.df %>%
+drop_na()
+
+MIC.outcome.df <-MIC.outcome.df %>%
+  mutate(N.per.Outcome = 1)%>%
+  group_by(Abx.con,
+           MIC,
+           ClearedVSpersistant_ATS
+           )%>%
+  mutate(N.per.Outcome =sum(N.per.Outcome))
+
+```
+
+
+# Combined dual axis plot
+
+
+
+## Fix plot based on discussion with LB
+
+LB % of outcom should reflect the trend of the bars similar like a histogram. Adjust calculation to be per abx per outcome.
+# Percent MIC plot per Abx per Outcome category
+```{r}
+# Assuming MIC.outcome.df is your data frame as described.
+# First, you need to group by both 'Abx.con' and 'ClearedVSpersistant_ATS' to calculate the sums of 'N.per.Outcome' for each category.
+
+MIC.perc.outcome.Updated.df <- MIC.outcome.df %>%
+  ungroup()%>%
+  select(Abx.con,
+         ClearedVSpersistant_ATS,
+         Abx.con,
+         MIC,
+         N.per.Outcome)%>%
+  distinct()%>%
+  group_by(Abx.con,
+           ClearedVSpersistant_ATS) %>%
+  mutate(Total_perAbx.perOutcome = sum(N.per.Outcome) )%>%
+  ungroup()%>%
+  group_by(Abx.con,
+           ClearedVSpersistant_ATS,
+           MIC)%>%
+  mutate(Percent_perMIC = round((N.per.Outcome / Total_perAbx.perOutcome)*100, digits = 1))%>%
+  ungroup()%>%
+  select(Abx.con,
+           ClearedVSpersistant_ATS,
+           MIC,
+         Percent_perMIC)%>%
+  distinct()
+
+# Calculate the maximum to scale secondary axis appropriately
+div.factor.scale <- max(MIC.outcome.df$N.per.Outcome , na.rm = TRUE)
+
+# Adjust the percent values to align with the primary y-axis scale
+max.percent <- max(MIC.perc.outcome.Updated.df$Percent_perMIC)
+scaling.factor <- div.factor.scale / max.percent  # Calculate the scaling factor for the secondary axis
+
+ 
+
+```
+
+
+# Make between Anitbiotic concentrations if there is gap e.g. 1,2,3,6,7,8 make 4 ,5 zero values
+```{r}
+library(dplyr)
+library(tidyr)
+
+# Assuming MIC.outcome.df is your dataframe
+
+# Generate all combinations of Abx.con, MIC, and ClearedVSpersistant_ATS with complete MIC range
+expanded_df <- MIC.outcome.df %>%
+  group_by(Abx.con, ClearedVSpersistant_ATS) %>%  # THIS WORKS 
+  #  group_by(Abx.con) %>%
+  summarize(MIC_range = list(seq(min(MIC), max(MIC))), .groups = "drop") %>%
+  unnest(c(MIC_range)) %>%
+  rename(MIC = MIC_range)
+
+# Join expanded_df with original to get all original data back
+# Filling missing N.per.Outcome values with 0
+full_df <- expanded_df %>%
+  left_join(MIC.outcome.df, by = c("Abx.con", "ClearedVSpersistant_ATS", "MIC")) %>% # KEEP
+  mutate(N.per.Outcome = ifelse(is.na(N.per.Outcome), 0, N.per.Outcome))
+
+
+full_df <- full_df %>%
+ungroup()%>%
+  select(Abx.con,
+         ClearedVSpersistant_ATS,
+         Abx.con,
+         MIC,
+         N.per.Outcome)%>%
+  distinct()%>%
+  group_by(Abx.con,
+           ClearedVSpersistant_ATS) %>%
+  mutate(Total_perAbx.perOutcome = sum(N.per.Outcome) )%>%
+  ungroup()%>%
+  group_by(Abx.con,
+           ClearedVSpersistant_ATS,
+           MIC)%>%
+  mutate(Percent_perMIC = round((N.per.Outcome / Total_perAbx.perOutcome)*100, digits = 1))%>%
+  ungroup()%>%
+  select(Abx.con,
+           ClearedVSpersistant_ATS,
+           MIC,
+         Percent_perMIC,
+         N.per.Outcome)%>%
+  distinct()
+
+
+# Calculate the maximum to scale secondary axis appropriately
+div.factor.scale <- max(full_df$N.per.Outcome , na.rm = TRUE)
+
+
+max.percent <- 100
+scaling.factor <- div.factor.scale / max.percent  # Calculate the scaling factor for the secondary axis
+```
+
+
+
+```{r}
+
+ rm(full_df,
+    expanded_df)
+
+```
+
+# Single bar plot representing all MIC counts with lines represening outcome
+```{r}
+MIC.Single.barplot.df <- MIC.df %>%
+  mutate(N.per.MIC = 1)%>%
+  group_by(Abx.con,
+           MIC) %>%
+  mutate(N.per.MIC = sum(N.per.MIC))%>%
+  ungroup()%>%
+  select(Abx.con,
+         MIC,
+         N.per.MIC)%>%
+  distinct()
+  
+  
+  # Assuming MIC.outcome.df is your dataframe
+
+# Generate all combinations of Abx.con, MIC, and ClearedVSpersistant_ATS with complete MIC range
+ MIC.Single.barplot.df.expanded <- MIC.Single.barplot.df %>%
+   group_by(Abx.con) %>%
+  summarize(MIC_range = list(seq(min(MIC), max(MIC))), .groups = "drop") %>%
+  unnest(c(MIC_range)) %>%
+  rename(MIC = MIC_range)
+
+# Join expanded_df with original to get all original data back
+# Filling missing N.per.Outcome values with 0
+ MIC.Single.barplot.df.full <- MIC.Single.barplot.df.expanded %>%
+  left_join(MIC.Single.barplot.df, by = c("Abx.con",  "MIC")) %>% # KEEP
+  mutate(N.per.MIC = ifelse(is.na(N.per.MIC), 0, N.per.MIC))
+ 
+ 
+ # Make sure to fill the gaps with the range of MIC of the outcome plots
+ 
+ # Generate all combinations of Abx.con, MIC, and ClearedVSpersistant_ATS with complete MIC range
+MIC.perc.outcome.Update.expanded <- MIC.perc.outcome.Updated.df %>%
+   group_by(Abx.con) %>%
+  summarize(MIC_range = list(seq(min(MIC), max(MIC))), .groups = "drop") %>%
+  unnest(c(MIC_range)) %>%
+  rename(MIC = MIC_range)%>%
+   mutate(Outcome1 ="Unkown",
+          Outcome2 = "Persistant",
+          Outcome3 ="Cleared")
+
+# Create the new data frame
+
+
+
+MIC.perc.outcome.Update.expanded <- melt(MIC.perc.outcome.Update.expanded ,
+               id.vars = c("Abx.con",
+                           "MIC"),
+                variable.name = "ClearedVSpersistant_ATS")%>%
+  select(-ClearedVSpersistant_ATS)%>%
+  mutate(ClearedVSpersistant_ATS = value)%>%
+  select(-value)%>%
+  mutate(MIC = as.numeric(MIC))
+
+#"ClearedVSpersistant_ATS"
+```
+
+
+```{r}
+MIC.perc.outcome.Update.full <- MIC.perc.outcome.Update.expanded %>%
+  left_join(MIC.perc.outcome.Updated.df, by = c("Abx.con",
+                                          "MIC",
+                                          "ClearedVSpersistant_ATS")) %>% # KEEP
+  ungroup()%>%
+  filter(ClearedVSpersistant_ATS != "Unkown")%>%
+  #group_by(ClearedVSpersistant_ATS)%>%
+  mutate(Percent_perMIC = ifelse(is.na(Percent_perMIC),
+                                 0,
+                                 Percent_perMIC))
+
+ rm(full_df,
+    expanded_df,
+   MIC.perc.outcome.Update.expanded,
+   MIC.Single.barplot.df.expanded)
+
+scaling.factor <- max(MIC.Single.barplot.df.full$N.per.MIC) / max.percent  # Calculate the scaling factor for the secondary axis
+
+div.factor.scale <-  max(MIC.Single.barplot.df.full$N.per.MIC)
+
+```
+
+
+# Plot with µg/ml 
+
+```{r}
+
+abx_data <- read_xlsx(mic.sub.range ) 
+
+abx_data <- abx_data %>%
+  mutate(MIN = `MIN [ug/ml]`,
+         MAX = `MAX [ug/ml]`,
+         log2_steps = `log2-steps`)%>%
+  select(Abx.con,
+         MIN,
+         MAX,
+         log2_steps)
+
+# Expand the dataframe into long format
+MICµg.gg <- abx_data %>%
+  rowwise() %>%
+  do({
+    data.frame(Abx.con = .$Abx.con,
+               MIC = exp(log(.$MIN) + seq(0, log(.$MAX/.$MIN), length.out = .$log2_steps)),
+               Step = seq_len(.$log2_steps))
+  })
+
+
+
+rm(abx_data)
+
+
+
+
+MICµg.gg_MIC.Single.barplot.df<- MIC.Single.barplot.df.full%>%
+  mutate(MIC = 2^ MIC)%>%
+  mutate(MIC_original = MIC)%>%
+    mutate(MIC = formatC(MIC, format = "f", digits = 4))%>%
+      mutate(MIC = if_else(MIC =="0.0313", "0.0312" , MIC))%>%
+ #  mutate(MIC = round(MIC))%>%
+    mutate(Abx.con = gsub("_MIC_lg2", "", Abx.con))
+
+
+
+MICµg.gg  <- MICµg.gg %>%
+  mutate(MIC_plot_label = MIC)%>%
+ # mutate(MIC = round(MIC))
+  mutate(MIC = formatC(MIC, format = "f", digits = 4))%>%
+  mutate(MIC = if_else(MIC =="0.0313", "0.0312" , MIC))
+
+
+
+MICµg.gg_MIC.perc.outcome.Update.full <- MIC.perc.outcome.Update.full %>%
+   mutate(MIC = 2^ MIC)%>%
+  mutate(MIC_original = MIC)%>%
+    mutate(MIC = formatC(MIC, format = "f", digits = 4))%>%
+    mutate(MIC = if_else(MIC =="0.0313", "0.0312" , MIC))%>%
+ #  mutate(MIC = round(MIC))%>%
+    mutate(Abx.con = gsub("_MIC_lg2", "", Abx.con))
+  
+MICµg.gg_MIC.perc.outcome.Update.full_TEST <- MICµg.gg%>%
+  left_join(MICµg.gg_MIC.perc.outcome.Update.full )%>%
+  drop_na()%>%
+    mutate(across(everything(), ~replace_na(., 0)))
+
+
+# Perform the left join
+NEW <- left_join(MICµg.gg,  
+                 MICµg.gg_MIC.Single.barplot.df)
+
+NEW <- NEW %>%
+    mutate(across(everything(), ~replace_na(., 0)))
+
+
+```
+
+
+
+```{r}
+order.of.MICs <- sort(as.numeric(unique(NEW$MIC)))
+
+
+
+
+
+
+order.of.MICs <- as.character(order.of.MICs )
+
+
+
+
+order.of.MICs <- c("0.0002", "0.0005", "0.0010", "0.0020", "0.0039", "0.0078", "0.0156", "0.03125", "0.0312","0.0313",  "0.0625", 
+                   "0.125", "0.25", "0.5", "1", "2", "4", "8", "16", "32", "64", 
+                   "128", "256", "512", "1024")
+
+
+order.of.MICs
+
+BDQ <- NEW %>%
+  filter(Abx.con == "BDQ")
+
+
+trim_zeros <- function(x) {
+  # Remove trailing zeros and a decimal point if it ends with one
+  x <- sub("\\.?0+$", "", x)
+  return(x)
+}
+
+
+NEW$MIC <- sapply(NEW$MIC, trim_zeros)
+
+
+MICµg.gg_MIC.perc.outcome.Update.full_TEST$MIC  <-sapply(MICµg.gg_MIC.perc.outcome.Update.full_TEST$MIC, trim_zeros)
+```
+
+```{r}
+
+ plot.path <- paste(resDir,
+                     "/",
+  "ASCTfig_MIC_Alldata_MICbarplot_Outcome_curves_MICµgml_subMICrange.pdf",
+  sep="")
+ 
+ 
+  
+pdf( plot.path )
+#Bob <-full_df %>%
+  NEW %>%
+  mutate(MIC = factor(MIC, levels = order.of.MICs))%>%
+  distinct()%>%
+    drop_na()%>%
+  ggplot(aes(x = MIC)) +
+  geom_bar(aes(y = N.per.MIC),
+           stat = "identity",
+           #position = position_stack(),
+           position = "dodge2",
+           alpha = 0.75) +
+  geom_line( data = MICµg.gg_MIC.perc.outcome.Update.full_TEST,
+             aes(y = Percent_perMIC * scaling.factor,
+               color = ClearedVSpersistant_ATS,
+                group = ClearedVSpersistant_ATS), 
+            alpha =0.5, 
+            size = 0.2) +
+  geom_point(data = MICµg.gg_MIC.perc.outcome.Update.full_TEST,
+             aes(y = Percent_perMIC * scaling.factor,
+               color = ClearedVSpersistant_ATS,
+            group = ClearedVSpersistant_ATS),
+             alpha =0.8, 
+            stroke = 0,
+             size =  0.5) +
+#  scale_x_continuous(breaks = -6:10) +
+  scale_y_continuous(
+    name = "Number of isolates per MIC",
+    limits = c(0, div.factor.scale), 
+    sec.axis = sec_axis(~ . / scaling.factor,
+                        name = "Percent per clinical outcome(%)",
+                        breaks = seq(0,100, by = 10))
+  ) +
+ scale_fill_manual(values = c("Cleared" = "navyblue",
+                               "Persistant" = "red")) +
+  scale_color_manual(values = c("Cleared" = "navyblue", 
+                                  "Persistant" = "red")) + # Matching color for the lines
+  labs(title = "Distribution of MIC by Antibiotic and Outcome", 
+       x = "MIC µg/ml",
+       fill = "ClearedVSpersistant_ATS") +
+  theme_prism(base_line_size = 0.2) +
+  theme(axis.line.y.right = element_line(color = "black"), 
+        axis.ticks.y.right = element_line(color = "black"),
+        axis.text.y.right = element_text(color = "black",
+                                         size = 3), 
+        axis.text.y = element_text(color = "black",
+                                         size = 3), 
+        axis.text.x = element_text(color = "black",
+                                         size = 1), 
+        axis.ticks.length = unit(0.025, "cm") ,
+        legend.position = "top",           # Position the legend at the top
+        
+        
+         axis.title = element_text(size = 14, face = "plain"),  # Axis titles not bold
+    axis.text = element_text(size = 12, face = "plain"),   # Axis text not bold
+    legend.title = element_text(size = 12, face = "plain"),# Legend title not bold
+    legend.text = element_text(size = 10, face = "plain"), # Legend text not bold
+    plot.title = element_text(size = 16, face = "plain") ,  # Plot title not bold
+    
+        axis.title.y.right = element_text(color = "black")) +
+  facet_wrap(~Abx.con, scales = "free_x")
+dev.off()
+
+```
+
+# Reduced  MIC dynamic range 
+```{r}
+ plot.path <- paste(resDir,
+                     "/",
+  "ASCTfig_MIC_Alldata_MICbarplot_Outcome_curves_MICµgml_subMICrange-FreeScale.pdf",
+  sep="")
+ 
+ 
+  
+pdf( plot.path )
+#Bob <-full_df %>%
+  NEW %>%
+  mutate(MIC = factor(MIC, levels = order.of.MICs))%>%
+  distinct()%>%
+    drop_na()%>%
+  ggplot(aes(x = MIC)) +
+  geom_bar(aes(y = N.per.MIC),
+           stat = "identity",
+           #position = position_stack(),
+           position = "dodge2",
+           alpha = 0.75) +
+  geom_line( data = MICµg.gg_MIC.perc.outcome.Update.full_TEST,
+             aes(y = Percent_perMIC * scaling.factor,
+               color = ClearedVSpersistant_ATS,
+                group = ClearedVSpersistant_ATS), 
+            alpha =0.5, 
+            size = 0.2) +
+  geom_point(data = MICµg.gg_MIC.perc.outcome.Update.full_TEST,
+             aes(y = Percent_perMIC * scaling.factor,
+               color = ClearedVSpersistant_ATS,
+            group = ClearedVSpersistant_ATS),
+             alpha =0.8, 
+            stroke = 0,
+             size =  0.5) +
+#  scale_x_continuous(breaks = -6:10) +
+  scale_y_continuous(
+    name = "Number of isolates per MIC",
+    limits = c(0, div.factor.scale), 
+    sec.axis = sec_axis(~ . / scaling.factor,
+                        name = "Percent per clinical outcome(%)",
+                        breaks = seq(0,100, by = 10))
+  ) +
+ scale_fill_manual(values = c("Cleared" = "navyblue",
+                               "Persistant" = "red")) +
+  scale_color_manual(values = c("Cleared" = "navyblue", 
+                                  "Persistant" = "red")) + # Matching color for the lines
+  labs(title = "Distribution of MIC by Antibiotic and Outcome", 
+       x = "MIC µg/ml",
+       fill = "ClearedVSpersistant_ATS") +
+  theme_prism(base_line_size = 0.2) +
+  theme(axis.line.y.right = element_line(color = "black"), 
+        axis.ticks.y.right = element_line(color = "black"),
+        axis.text.y.right = element_text(color = "black",
+                                         size = 3), 
+        axis.text.y = element_text(color = "black",
+                                         size = 3), 
+        axis.text.x = element_text(color = "black",
+                                         size = 1), 
+        axis.ticks.length = unit(0.025, "cm") ,
+        legend.position = "top",           # Position the legend at the top
+        
+        
+         axis.title = element_text(size = 14, face = "plain"),  # Axis titles not bold
+    axis.text = element_text(size = 12, face = "plain"),   # Axis text not bold
+    legend.title = element_text(size = 12, face = "plain"),# Legend title not bold
+    legend.text = element_text(size = 10, face = "plain"), # Legend text not bold
+    plot.title = element_text(size = 16, face = "plain") ,  # Plot title not bold
+    
+        axis.title.y.right = element_text(color = "black")) +
+  facet_wrap(~Abx.con, scales = "free")
+dev.off()
+
+
+
+```
+
+
+```{r}
+plot.path <- paste(resDir,
+                     "/",
+  "ASCTfig_MIC_Alldata_MICbarplot_Outcome_curves_MICµgml_subMICrange-FreeScale-ExclRFB.BDQ.pdf",
+  sep="")
+ 
+ NEW.exl <- NEW %>%
+  filter(Abx.con != "RFB", Abx.con != "BDQ")
+ 
+ 
+ MICµg.gg_MIC.perc.outcome.Update.full_TEST.exl <- MICµg.gg_MIC.perc.outcome.Update.full_TEST %>%
+     filter(Abx.con != "RFB", Abx.con != "BDQ")
+
+pdf(plot.path)
+
+NEW.exl %>%
+  filter(Abx.con != "RFB", Abx.con != "BDQ") %>%
+  mutate(MIC = factor(MIC, levels = order.of.MICs)) %>%
+  distinct() %>%
+  drop_na() %>%
+  ggplot(aes(x = MIC)) +
+  geom_bar(aes(y = N.per.MIC),
+           stat = "identity",
+           position = "dodge2",
+           alpha = 0.75) +
+  geom_line(data = MICµg.gg_MIC.perc.outcome.Update.full_TEST.exl,
+            aes(y = Percent_perMIC * scaling.factor,
+                color = ClearedVSpersistant_ATS,
+                group = ClearedVSpersistant_ATS), 
+            alpha = 0.5, 
+            size = 0.2) +
+  geom_point(data = MICµg.gg_MIC.perc.outcome.Update.full_TEST.exl,
+             aes(y = Percent_perMIC * scaling.factor,
+                 color = ClearedVSpersistant_ATS,
+                 group = ClearedVSpersistant_ATS),
+             alpha = 0.8, 
+             stroke = 0,
+             size = 0.5) +
+  
+  
+  scale_y_continuous(
+  name = "Number of isolates per MIC",
+  limits = c(0, div.factor.scale), 
+  sec.axis = sec_axis(~ . / scaling.factor,
+                      name = "Percent per clinical outcome(%)",
+                      breaks = seq(0, 100, by = 20),
+                      labels = scales::label_number(accuracy = 1)
+                      ) 
+) +
+  scale_fill_manual(values = c("Cleared" = "navyblue",
+                               "Persistant" = "red")) +
+  scale_color_manual(values = c("Cleared" = "navyblue", 
+                                "Persistant" = "red")) + # Matching color for the lines
+  labs(title = "Distribution of MIC by Antibiotic and Outcome", 
+       x = "MIC µg/ml",
+       fill = "ClearedVSpersistant_ATS") +
+  theme_prism(base_line_size = 0.2) +
+  theme(text = element_text(size = 7))+
+  theme(axis.line.y.right = element_line(color = "black"), 
+        axis.ticks.y.right = element_line(color = "black"),
+        axis.text.y.right = element_text(color = "black", size = 3), 
+        axis.text.y = element_text(color = "black", size = 7), 
+  axis.text.x = element_text(color = "black", size = 7, angle = 45, vjust = 1, margin = margin(t = 2)), 
+        axis.ticks.length = unit(0.025, "cm"),
+        legend.position = "top",           # Position the legend at the top
+        axis.title = element_text(size = 16, face = "plain"),  # Axis titles not bold
+        axis.text = element_text(size = 14, face = "plain"),   # Axis text not bold
+        legend.title = element_text(size = 14, face = "plain"),# Legend title not bold
+        legend.text = element_text(size = 12, face = "plain"), # Legend text not bold
+        plot.title = element_text(size = 18, face = "plain"),  # Plot title not bold
+        axis.title.y.right = element_text(color = "black")) +
+  facet_wrap(~Abx.con, scales = "free")
+
+dev.off()
+
+
+```
+

@@ -1,0 +1,899 @@
+---
+title: "ASCTmut.06_MABko_overview"
+output: html_document
+date: "2024-06-04"
+---
+# ================================================================
+# Aim
+# ================================================================
+# This script summarizes time-kill kinetics of Mycobacterium abscessus
+# knockout strains compared to controls across antibiotics.
+#
+# Functionality:
+# - Loads single-cell live-cell fraction (LCF) time-series and AUC data.
+# - Cleans isolate/bioreplicate labels and separates mutants from controls.
+# - Replicates control curves per mutant and drug for direct comparison.
+# - Plots:
+#     • All single-well curves
+#     • Means per bioreplicate
+#     • Means per isolate and per drug
+#     • Mean ± SEM curves for key mutant/control groups.
+# - Exports replicate count tables and AUC summary tables for downstream use.
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(reshape2)
+
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(reshape2)
+library(scales)
+
+
+```
+
+
+#1. Define paths
+```{r}
+
+wdDir <- getwd()
+
+setwd(wdDir)
+
+resDir.original <- paste(wdDir,
+                "/Experimental-Results",
+                sep="")
+  
+  
+resDir <- paste(wdDir,
+                "/Experimental-Results-MABko_overview",
+                sep="")
+
+data.dir <- paste(wdDir,
+                "/ASCT_Data",
+                sep="")
+
+plot.xaxis.time.scale <- c(0,12,24,36,48,60,72)
+
+
+```
+
+
+#2. Load data LCF data
+```{r}
+MAB.df <- read.csv(paste(resDir.original,
+                         "/",
+                         "ASCTmut.04.20240816_Trkv2_LCF_flags.csv",
+                         sep=""))
+
+
+MAB.df <- MAB.df %>%
+  filter(Time.Kill.Definitions == "Trkv2_LCF_Ila2BaSic")%>%
+  filter(T_Tot.N >= 350)%>%
+  #filter(T_Eval_Trck.Numbers == ">0.5K")%>%
+  filter(Abx.con != "NoDrug")%>%
+  select(-Flag.label)
+
+
+
+
+MAB.df <- MAB.df %>%
+  mutate(Isolate = gsub("r1", "_biorep1", Isolate))%>%
+  mutate(Isolate = gsub("r2", "_biorep2", Isolate))%>%
+    mutate(Isolate = gsub("r3", "_biorep3", Isolate))%>%
+  mutate(Isolate = gsub("Iso.", "", Isolate))
+
+
+MAB.df <- separate(MAB.df, col = Isolate,
+                   into = c("Isolate",
+                            "Biorep"),
+                   sep ="_biorep")
+
+
+MAB.df <- MAB.df %>%
+   group_by(Abx.con,
+           
+           Isolate,
+
+           Biorep,
+           timestep)%>%
+   mutate(Mean_Time_Hrs = mean(Time_Hrs),
+         Mean_LC.fraction.corr = mean(LC.fraction.corr))%>%
+  ungroup()%>%
+   group_by(Abx.con,
+           Isolate,
+           timestep)%>%
+  mutate(Mean_Time_Hrs.perIso = mean(Time_Hrs),
+         Mean_LC.fraction.corr.perIso = mean(LC.fraction.corr))%>%
+  ungroup()
+```
+
+# Load AUC data 
+```{r}
+AUC.df <- read.csv(paste(resDir.original,
+                         "/",
+                         "ASCTmut.04.20240816_Trkv2_KFintermediary.csv",
+                         sep=""))
+
+AUC.df <- AUC.df %>%
+  filter(Main.KF == "AUCrt")%>%
+  filter(Killing.Features =="Trkv2_AUCrt_0.72h_Ila2BaSic")%>%
+  select(ExpFile,
+         Abx.con,
+         Well_coordinate,
+        
+         value)%>%
+  mutate(AUC_0.72h = value)%>%
+  select(-value)
+```
+
+```{r}
+print(unique(MAB.df$Isolate))
+
+Original.MAB.df <- MAB.df
+```
+
+
+```{r}
+MAB.df.avg.df <- MAB.df
+
+
+# Orbit controls
+MAB.Ctrl.df <- MAB.df %>%
+  filter(Isolate == "ORBITctrl1" | Isolate == "ORBITctrl2" | Isolate == "MABATCC19977" | Isolate ==  "MABATCCKM444" )
+
+MAB.Ctrl.df <-MAB.Ctrl.df%>%
+  mutate(Control = Isolate)
+
+
+MAB.df <- MAB.df %>%
+  filter(Isolate != "ORBITctrl1")%>%
+    filter(Isolate != "ORBITctrl2")%>%
+  filter(Isolate != "MABATCC19977" )%>%
+  filter(Isolate != "MABATCCKM444")
+
+
+MAB.df <- MAB.df %>%
+  mutate(Control = "MABko")
+
+
+
+
+```
+
+# 2.1 Loop to merge control data to main df
+We want to plot the control of a particular drug in each fig of the MAB ko. leverage facets we need to make the control have the same name as the mutant while defning it being a contol in a different variable.
+```{r}
+
+list.of.MABs <- unique(MAB.df$Isolate)
+list.of.drugs <- unique(MAB.df$Abx.con)
+MAB.Ctrl.updated.df <- data.frame()
+
+# i <-list.of.MABs[1]
+# j <- list.of.drugs[1]
+for ( i in list.of.MABs) {
+  
+  for ( j in list.of.drugs ) {
+    
+    
+      MAB.Ctrl.df.sub <- MAB.Ctrl.df %>%
+        filter(Abx.con == j)%>%
+        mutate(Isolate = i)
+    
+      
+      MAB.Ctrl.updated.df  <- rbind(MAB.Ctrl.updated.df,
+                                          MAB.Ctrl.df.sub)
+    
+  }
+
+    
+  
+}
+
+#Houskeeping
+rm(MAB.Ctrl.df.sub)
+```
+
+## 2.2 Merging data
+```{r}
+MABko.Ctrl.Update.df <- rbind(MAB.df,
+                              MAB.Ctrl.updated.df)
+
+
+
+```
+
+
+
+```{r}
+MABko.Ctrl.Update.df <- MABko.Ctrl.Update.df %>%
+  mutate(Abx = str_extract(Abx.con, "^[^_]+"))
+
+
+# MABko.Ctrl.Update.df.NAs <- MABko.Ctrl.Update.df %>%
+# filter(if_any(everything(), is.na))
+```
+
+#3. Plotting time kill kinetics
+## 3.1 All time kill curves with control per mutant
+```{r}
+
+# PLOTTING TIME KILL CURVES
+LiveCells <- paste(resDir,"/",unique(MAB.df$ExpFile),"_MAB_TimeKillCurves_LIN.pdf", sep = "")
+#LC_plottitle <- paste ( "Time kill curves")
+library(ggrepel)
+gg <-MABko.Ctrl.Update.df  %>%
+   ggplot(aes(x = Time_Hrs,
+             y = LC.fraction.corr,
+             group = Well_coordinate,
+             label = Well_coordinate,
+             colour = Control))+
+  geom_line( 
+             alpha = 0.5,
+             size = 0.1)+
+ 
+#  ylim(0,1.0)+
+  theme_pubr()+
+ # ggtitle(LC_plottitle)+
+ scale_y_continuous(
+
+                    breaks = c(0, 0.2,0.4,0.6,0.8,1),
+                    limits = c(0,1),
+                     labels = c(0, 0.2,0.4,0.6,0.8, 1))+
+    geom_text(data = .  %>% group_by(Well_coordinate) %>% top_n(n = 1, wt = Time_Hrs),
+      aes(label = Biorep), size = 0.1)+ # Original
+
+    scale_colour_manual(values=c(MABko="firebrick",
+                                 ORBITctrl1="dodgerblue",
+                                 ORBITctrl2 ="dodgerblue",
+                                MABATCC19977 = "gold",
+                                MABATCCKM444 = "darkgreen"))+
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title ="MAB knockouts time kill kinetics",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Sample")+
+   
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+  facet_wrap_paginate(~ Abx.con+ Isolate,
+                      ncol =10,
+                      nrow =10,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(LiveCells ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(~ Abx.con+ Isolate,
+                      ncol =10,
+                      nrow =10, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   LiveCells)
+  
+
+```
+
+
+```{r}
+
+# PLOTTING TIME KILL CURVES
+LiveCells <- paste(resDir,"/",unique(MAB.df$ExpFile),"_MAB_TimeKillCurves_LOG.pdf", sep = "")
+library(ggrepel)
+gg <-MABko.Ctrl.Update.df  %>%
+   ggplot(aes(x = Time_Hrs,
+             y = log10(LC.fraction.corr),
+             group = Well_coordinate,
+             label = Well_coordinate,
+             colour = Control))+
+  geom_line( 
+             alpha = 0.5,
+             size = 0.1)+
+ 
+  theme_pubr()+
+scale_y_continuous(
+
+                    breaks = c(0, -0.999,  -1.999),
+                    limits = c(-3,0),
+                     labels = c(100, 10, 1))+
+    geom_text(data = .  %>% group_by(Well_coordinate) %>% top_n(n = 1, wt = Time_Hrs),
+      aes(label = Biorep), size = 0.1)+ # Original
+
+   scale_colour_manual(values=c(MABko="firebrick",
+                                 ORBITctrl1="dodgerblue",
+                                 ORBITctrl2 ="dodgerblue",
+                                MABATCC19977 = "gold",
+                                MABATCCKM444 = "darkgreen"))+
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title ="MAB knockouts time kill kinetics",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       color = "Sample")+
+   
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+ facet_wrap_paginate(~ Abx.con+ Isolate,
+                      ncol =10,
+                      nrow =10,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(LiveCells ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(~ Abx.con+ Isolate,
+                      ncol =10,
+                      nrow =10, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   LiveCells)
+  
+```
+
+
+## 3.1 Average of time kill curves  per bioreplicate
+Calculate the average time kill kinetics per biological replicate
+
+```{r}
+Avg.MABko.Ctrl.Update.df<- MABko.Ctrl.Update.df %>%
+  ungroup()%>%
+    mutate(Concentration = str_extract(Abx.con, "(?<=_).*"))%>%
+
+  select(ExpFile,
+         Abx,
+         Concentration,
+         Abx.con,
+         Isolate,
+         Biorep,
+         Control,
+         timestep,
+         Mean_Time_Hrs,
+        Mean_LC.fraction.corr,
+        Mean_LC.fraction.corr.perIso)%>%
+  distinct()%>%
+  ungroup()
+
+
+
+```
+
+```{r}
+unique(MABko.Ctrl.Update.df$Isolate)
+```
+
+
+```{r}
+# PLOTTING TIME KILL CURVES
+LiveCells <- paste(resDir,"/",unique(MAB.df$ExpFile),"_MAB_TimeKillCurves_LIN-Mean.perBiorep.pdf", sep = "")
+#LC_plottitle <- paste ( "Time kill curves")
+library(ggrepel)
+gg <-MABko.Ctrl.Update.df %>%
+  mutate(Plot.group.var = paste(Isolate,
+                                Biorep,
+                                Control))%>%
+  select(-Well_coordinate)%>%
+  distinct()%>%
+   ggplot(aes(x = Mean_Time_Hrs,
+             y = Mean_LC.fraction.corr,
+             group = Plot.group.var,
+             label = Biorep,
+             colour = Control))+
+  geom_line( 
+             alpha = 0.5,
+             size = 0.1)+
+ 
+  theme_pubr()+
+ scale_y_continuous(
+
+                    breaks = c(0, 0.2,0.4,0.6,0.8,1),
+                    limits = c(0,1),
+                     labels = c(0, 0.2,0.4,0.6,0.8, 1))+
+    
+
+    scale_colour_manual(values=c(MABko="firebrick",
+                                 ORBITctrl1="dodgerblue",
+                                 ORBITctrl2 ="dodgerblue",
+                                MABATCC19977 = "gold",
+                                MABATCCKM444 = "darkgreen"))+
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title ="MAB knockouts time kill kinetics",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       subtitle = "Mean of biological replicates",
+       color = "Sample")+
+   
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+ facet_wrap_paginate(~ Abx.con+ Isolate,
+                      ncol =10,
+                      nrow =10,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(LiveCells ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(~ Abx.con+ Isolate,
+                      ncol =10,
+                      nrow =10, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   LiveCells)
+  
+  
+```
+
+
+
+## 3.2 Average of time kill curves  per MAB strain
+Calculate the average time kill kinetics per biological replicate
+
+```{r}
+
+Avg.perIso.MABko.Ctrl.Update.df<- MABko.Ctrl.Update.df %>%
+  ungroup()%>%
+      mutate(Concentration = str_extract(Abx.con, "(?<=_).*"))%>%
+
+  select(ExpFile,
+         Abx,
+         Concentration,
+         Abx.con,
+         Isolate,
+
+         Control,
+         timestep,
+         Mean_Time_Hrs.perIso,
+        Mean_LC.fraction.corr.perIso)%>%
+  distinct()
+
+
+
+
+
+```
+
+
+```{r}
+# PLOTTING TIME KILL CURVES
+LiveCells <- paste(resDir,"/",unique(MAB.df$ExpFile),"_MAB_TimeKillCurves_LIN-Mean.perIso.pdf", sep = "")
+library(ggrepel)
+gg <-Avg.perIso.MABko.Ctrl.Update.df  %>%
+  mutate(Plot.group.var = paste(Isolate,
+                                Control))%>%
+   ggplot(aes(x = Mean_Time_Hrs.perIso,
+             y = Mean_LC.fraction.corr.perIso,
+             group = Plot.group.var,
+             colour = Control))+
+  geom_line( 
+             alpha = 0.5,
+             size = 0.1)+
+ 
+  theme_pubr()+
+ scale_y_continuous(
+
+                    breaks = c(0, 0.2,0.4,0.6,0.8,1),
+                    limits = c(0,1),
+                     labels = c(0, 0.2,0.4,0.6,0.8, 1))+
+   
+
+    scale_colour_manual(values=c(MABko="firebrick",
+                                 ORBITctrl1="dodgerblue",
+                                 ORBITctrl2 ="dodgerblue",
+                                MABATCC19977 = "gold",
+                                MABATCCKM444 = "darkgreen"))+
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title ="MAB knockouts time kill kinetics",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       subtitle = "Mean per isolate",
+       color = "Sample")+
+   
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+facet_wrap_paginate(~ Abx.con+ Isolate,
+                      ncol =10,
+                      nrow =10,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(LiveCells ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(~ Abx.con+ Isolate,
+                      ncol =10,
+                      nrow =10, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   LiveCells)
+  
+```
+
+
+### 3.2.1 Plot per Abx all mutants and control
+```{r}
+MAB.df.avg.df <- MAB.df.avg.df  %>%
+      mutate(Concentration = str_extract(Abx.con, "(?<=_).*"))%>%
+  mutate(Abx = str_extract(Abx.con, "^[^_]+"))%>%
+
+select(ExpFile,
+         Abx,
+         Concentration,
+         Abx.con,
+         Isolate,
+         timestep,
+         Mean_Time_Hrs.perIso,
+        Mean_LC.fraction.corr.perIso)%>%
+  distinct()%>%
+  ungroup()
+
+MAB.df.avg.df <- MAB.df.avg.df  %>%
+ mutate(Control = case_when(
+    grepl("ORBIT", Isolate) ~ Isolate,
+    grepl("MABATCC", Isolate) ~ Isolate,
+    TRUE ~ "MABko"
+  ))
+
+```
+
+
+```{r}
+# PLOTTING TIME KILL CURVES
+LiveCells <- paste(resDir,"/",unique(MAB.df$ExpFile),"_MAB_TimeKillCurves_LIN-Mean.perIso.perDrug.pdf", sep = "")
+library(ggrepel)
+gg <- MAB.df.avg.df  %>%
+ 
+  mutate(Plot.group.var = paste(Isolate,
+                           Abx.con,
+                                Control))%>%
+  
+   ggplot(aes(x = Mean_Time_Hrs.perIso,
+             y = Mean_LC.fraction.corr.perIso,
+             group = Isolate,
+             label= Isolate,
+             colour = Control))+
+  geom_line( 
+             alpha = 0.50,
+             size = 0.1)+
+   geom_text(data = . %>% group_by(Plot.group.var ) %>% slice(which.max(Mean_Time_Hrs.perIso)),
+            aes(label = Isolate),
+         #   nudge_x = 0.5, # Adjusts the position of text a bit to the right for better visibility
+            size = 0.199) +
+  theme_pubr()+
+ scale_y_continuous(
+
+                    breaks = c(0, 0.2,0.4,0.6,0.8,1),
+                    limits = c(0,1),
+                     labels = c(0, 0.2,0.4,0.6,0.8, 1))+
+   
+
+    scale_colour_manual(values=c(MABko="black",
+                                 ORBITctrl1="dodgerblue",
+                                 ORBITctrl2 ="dodgerblue",
+                                MABATCC19977 = "red",
+                                MABATCCKM444 = "darkgreen"))+
+    theme(axis.text = element_text(size = 3))     +
+    theme(strip.text.x = element_text(size = 3))+
+    theme(legend.key.size = unit(0.1, "cm"),
+    legend.key.width = unit(0.1,"cm"))+
+    scale_x_continuous( breaks = plot.xaxis.time.scale)+
+    labs(title ="MAB knockouts time kill kinetics",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       subtitle = "Mean per isolate",
+       color = "Sample")+
+   
+  theme(legend.position="top")+
+   theme(aspect.ratio = 1)+
+   theme(plot.subtitle = element_text(size = 5))+
+
+  facet_wrap_paginate(~Abx,
+                      ncol =5,
+                      nrow =4,
+                      page =1)
+n <- n_pages(gg)
+
+pdf(LiveCells ,paper = "a4", width = 20 , height = 15 )
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(~ Abx.con,
+                      ncol =5,
+                      nrow =4, page = i)) 
+}
+dev.off()
+
+#Houskeeping
+rm(gg,
+   LiveCells)
+```
+
+
+
+```{r}
+#Houskeeping
+rm(Avg.MABko.Ctrl.Update.df,
+   Avg.perIso.MABko.Ctrl.Update.df,
+  # MAB.df,
+   MAB.df.avg.df,
+   MABko.Ctrl.Update.df)
+```
+
+# Calculating the SEM confidence interval around the mean
+
+
+```{r}
+
+# Step 1: Calculate the mean, standard deviation, and SEM for each isolate and antibiotic concentration at each time point
+MAB.df.summary <- Original.MAB.df %>%
+
+  group_by(Isolate,
+           Abx.con,
+           timestep) %>%
+  summarise(
+    Mean_Time = mean(Time_Hrs, na.rm = TRUE),
+    Mean_LC = mean(LC.fraction.corr, na.rm = TRUE),
+    SD_LC = sd(LC.fraction.corr, na.rm = TRUE),
+    N = n(),
+    SEM_LC = ifelse(N > 1, SD_LC / sqrt(N), NA),  # Standard Error of the Mean, set to NA if N <= 1
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    CI_Lower = ifelse(N > 1, Mean_LC - qt(0.975, df = N - 1) * SEM_LC, NA),  # 95% CI lower bound
+    CI_Upper = ifelse(N > 1, Mean_LC + qt(0.975, df = N - 1) * SEM_LC, NA)   # 95% CI upper bound
+  )
+
+
+```
+
+
+```{r}
+# Ensure required libraries are loaded
+library(dplyr)
+library(tidyr)  # Required for expand_grid function
+library(ggrepel)
+library(ggforce)
+library(ggpubr)
+library(ggplot2)
+
+# Assuming resDir is defined and MAB.df.summary is already loaded and contains the necessary data
+
+# Replace special characters in file name
+
+# Check if 'IsolateGroup' exists; if not, create it
+if (!"IsolateGroup" %in% colnames(MAB.df.summary)) {
+  MAB.df.summary <- MAB.df.summary %>%
+    mutate(IsolateGroup = case_when(
+      grepl("MAB0233", Isolate) ~ "MAB0233",
+      grepl("MAB4875", Isolate) ~ "MAB4875",
+      TRUE ~ "Other"  # Assign other group if needed
+    ))
+}
+
+# Check if 'IsolateGroupOriginal' already exists and rename appropriately
+if ("IsolateGroup" %in% colnames(MAB.df.summary) && !"IsolateGroupOriginal" %in% colnames(MAB.df.summary)) {
+  MAB.df.summary <- MAB.df.summary %>%
+    rename(IsolateGroupOriginal = IsolateGroup)
+} else if ("IsolateGroupOriginal" %in% colnames(MAB.df.summary)) {
+  # If 'IsolateGroupOriginal' already exists, create a unique name
+  MAB.df.summary <- MAB.df.summary %>%
+    rename(IsolateGroupOriginal2 = IsolateGroup)
+}
+
+# Duplicate control data to appear in both MAB0233 and MAB4875 groups
+controls <- MAB.df.summary %>%
+  filter(Isolate %in% c("MABATCC19977", "MABATCCKM444", "ORBITctrl1", "ORBITctrl2")) %>%
+  expand_grid(IsolateGroup = c("MAB0233", "MAB4875"))
+
+# Update the IsolateGroup for MAB0233 and MAB4875 without controls
+MAB.df.updated <- MAB.df.summary %>%
+  filter(!Isolate %in% c("MABATCC19977", "MABATCCKM444", "ORBITctrl1", "ORBITctrl2")) %>%
+  mutate(IsolateGroup = case_when(
+    grepl("MAB0233", Isolate) ~ "MAB0233",
+    grepl("MAB4875", Isolate) ~ "MAB4875",
+    TRUE ~ "Other"  # This can be adjusted if more groups are known
+  ))
+
+# Combine the updated data with controls
+MAB.df.combined <- bind_rows(MAB.df.updated, controls)
+
+# Filter the data to include only relevant isolates and controls
+MAB.df.filtered <- MAB.df.combined %>%
+  filter(IsolateGroup %in% c("MAB0233", "MAB4875"))
+```
+
+```{r}
+LB.20250224.df <- MAB.df.filtered %>%
+  select(Isolate,
+         Abx.con,
+         N)%>%
+  ungroup()%>%
+  distinct()
+
+
+
+LB.20250224.df  <- LB.20250224.df %>%
+  pivot_wider(names_from = Isolate, values_from = N)
+
+write.csv(LB.20250224.df, 
+        paste(resDir, "/", gsub("%", "pct", unique(MAB.Ctrl.df$ExpFile)), "_Table.of.Replicates.csv", sep = ""),
+        row.names = FALSE )
+
+str(LB.20250224.df)
+```
+
+
+```{r}
+# Replace special characters in file name
+LiveCells <- paste(resDir, "/", gsub("%", "pct", unique(MAB.Ctrl.df$ExpFile)), "_MAB_TimeKillCurves_mean_SEM.pdf", sep = "")
+
+# Create the plot with SEM shaded region
+gg <- MAB.df.filtered %>%
+  mutate(Plot.group.var = paste(Isolate, IsolateGroup, sep = "_")) %>%
+  ggplot(aes(x = Mean_Time,  # Use Mean_Time as the x-axis variable
+             y = Mean_LC,
+             group = Plot.group.var,
+             label = Isolate,
+             colour = Isolate)) +
+  geom_line(alpha = 0.80, size = 0.1) +
+  # Shade the region representing SEM with the same color as the line
+  geom_ribbon(aes(ymin = Mean_LC - SEM_LC, ymax = Mean_LC + SEM_LC, fill = Isolate), alpha = 0.2, color = NA) +
+  theme_pubr() +
+  scale_y_continuous(
+    breaks = c(0, 0.2, 0.4, 0.6, 0.8, 1),
+    limits = c(0, 1),
+    labels = c(0, 0.2, 0.4, 0.6, 0.8, 1)) +
+  # Update color scales with specified colors
+  scale_colour_manual(values = c(
+  MAB0233 = "red", 
+    MAB4875 = "coral", 
+    `MAB0233MV261+KAN` = "#006400",  # Dark green
+  `MAB4875MV261+KAN` = "#228B22",  # Forest green
+    `MAB0233MV261-KAN` = "olivedrab", 
+    `MAB4875MV261-KAN` = "#556B2F",  # Dark Olive Green
+    MABATCC19977 = "steelblue", 
+    MABATCCKM444 = "darkblue", 
+    ORBITctrl1 = "grey25", 
+    ORBITctrl2 = "grey50"
+  )) +
+  scale_fill_manual(values = c(
+    MAB0233 = "red", 
+    MAB4875 = "coral", 
+    `MAB0233MV261+KAN` = "#006400",  # Dark green
+  `MAB4875MV261+KAN` = "#228B22",  # Forest green
+    `MAB0233MV261-KAN` = "olivedrab", 
+    `MAB4875MV261-KAN` = "#556B2F",  # Dark Olive Green
+    MABATCC19977 = "steelblue", 
+    MABATCCKM444 = "darkblue", 
+    ORBITctrl1 = "grey25", 
+    ORBITctrl2 = "grey50"
+  )) +  # Matching fill color
+  theme(axis.text = element_text(size = 3)) +
+  theme(strip.text.x = element_text(size = 3)) +
+  theme(legend.key.size = unit(0.1, "cm"),  # Adjust size of legend keys
+        legend.key.width = unit(0.1, "cm"),
+        legend.text = element_text(size = 6),  # Adjust size of legend text
+        legend.title = element_text(size = 7),  # Adjust size of legend title
+        legend.spacing = unit(0.1, "cm"),  # Adjust spacing between legend items
+        legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "cm")) +  # Adjust legend margins
+  scale_x_continuous(breaks = plot.xaxis.time.scale) +
+  labs(title = "MAB knockouts time kill kinetics",
+       x = "Time [Hrs]",
+       y = "Percentage of cells alive [%]",
+       subtitle = "Mean  and SEM (shaded) per Isolate",
+       color = "Sample",
+       fill = "Sample") +  # Added fill to legend
+  theme(legend.position = "top") +
+  theme(aspect.ratio = 1) +
+  theme(plot.subtitle = element_text(size = 5)) +
+  facet_wrap_paginate(~IsolateGroup + Abx.con,
+                      ncol = 7,
+                      nrow = 4, 
+                      page = 1)
+
+n <- n_pages(gg)
+
+# Save the plot to a PDF file
+pdf(file = normalizePath(LiveCells), paper = "a4", width = 20, height = 15)
+for(i in 1:n) {
+  print(gg + facet_wrap_paginate(~IsolateGroup + Abx.con, ncol = 7, nrow = 4, page = i))
+}
+dev.off()
+
+# Housekeeping
+rm(gg, controls, MAB.df.updated, MAB.df.combined)
+
+```
+
+# Mean AUC
+```{r}
+AUC.df2 <- left_join(Original.MAB.df,
+                     AUC.df)
+
+AUC.df.LBexport <- AUC.df2 %>%
+select(ExpFile,
+       Abx.con,
+       Isolate,
+       Biorep,
+       Well_coordinate,
+       AUC_0.72h)%>%
+  distinct()%>%
+  drop_na()
+
+  write.csv(AUC.df.LBexport ,paste(resDir, "/",  unique(MAB.Ctrl.df$ExpFile), "_MAB_allAUCs.csv", sep = ""),
+          row.names = FALSE)
+  
+AUC.summary.df <- AUC.df2 %>%
+select(ExpFile,
+       Abx.con,
+       Isolate,
+       AUC_0.72h)%>%
+  distinct()%>%
+  group_by(Isolate,
+           Abx.con) %>%
+  summarise(
+  
+    Mean_AUC_0.72h = mean(AUC_0.72h, na.rm = TRUE),
+    SD_AUC = sd(AUC_0.72h, na.rm = TRUE),
+    N = n(),
+    SEM_LC = ifelse(N > 1, SD_AUC / sqrt(N), NA),  # Standard Error of the Mean, set to NA if N <= 1
+    .groups = 'drop'
+  ) 
+
+
+str(AUC.summary.df)
+    
+
+# Spread the dataframe
+AUC.summary.wide <- AUC.summary.df %>%
+  mutate(Abx.con = paste(Abx.con,
+                         "_MeanAUC0.72h",
+                         sep=""))%>%
+  select(Isolate,
+         Abx.con,
+         Mean_AUC_0.72h)%>%
+  pivot_wider(names_from = Abx.con, 
+              values_from = Mean_AUC_0.72h)
+
+write.csv(AUC.summary.wide ,paste(resDir, "/",  unique(MAB.Ctrl.df$ExpFile), "_MAB_AUCs.csv", sep = ""),
+          row.names = FALSE)
+```
+

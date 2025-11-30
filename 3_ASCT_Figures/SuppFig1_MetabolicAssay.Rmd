@@ -1,0 +1,2014 @@
+---
+title: "CFUmtb analysis"
+author: "Alex"
+date: "2025-01-28"
+output: html_document
+---
+# ================================================================
+# Aim
+# ================================================================
+# Relate MTB resazurin metabolic activity to in vivo regimen outcomes
+# and ASCT time-kill (AUC) metrics.
+#
+# This script:
+# - Loads preclinical/clinical outcome data (RMM, BMM, C3HeB/FeJ, Clinical)
+#   and resazurin metabolic assay readouts.
+# - Merges regimens/strains, cleans annotations and computes % RFU change
+#   from day 0 to day 14 for each strain and regimen.
+# - Tests whether % RFU change differs between "Standard of Care" and
+#   "Better than SOC" regimens using Mann–Whitney U tests.
+# - Plots metabolic time courses (raw and normalised RFU) per strain
+#   and regimen across days.
+# - Creates boxplots of metabolic activity vs in vivo outcome classes
+#   (per strain, per model) with annotated p-values.
+# - Exports tidy tables of metabolic curves and % RFU changes for all
+#   strains and regimens.
+# - Correlates ASCT AUC values with % RFU change and generates
+#   scatterplots (with R, R² and p) for selected strains/conditions.
+
+#1. Defining variables
+```{r}
+info.wd <- getwd()
+info.res <- paste(info.wd,
+                  "/Experiment-Results",
+                  sep="")
+
+
+info.mtb.auc <- c("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCT/ASCT_Figures/ASCT_Main_Data/TableS1_MTB_AUC.csv")
+
+
+```
+
+## 1.1  Load libraries
+```{r}
+# Data wrangling
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# Loading xlsx tables
+library(readxl)
+
+# Visualization
+library(ggplot2)
+library(ggprism) 
+library(wesanderson) # Color palette
+library(ggpubr)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels)
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggrepel)
+library(ggExtra)
+
+# Statistical analysis
+library(rstatix)
+library(coin)
+library(broom)
+
+# Grid manipulation for ggplot
+library(grid)
+
+```
+
+
+# 2.  Load MTB data
+```{r}
+MTB.df <- read.csv(info.mtb.auc)
+
+MTB.df <- MTB.df %>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         RMM.2021,
+         BMM.2021,
+         BMM.BHeB.in.C3HeB.FeJ.2021,
+         Clinical.2022)
+```
+
+# 3 Load Resazurin metabolic activity assay
+```{r}
+
+
+resazurin.stvd.df <- read.csv("/Users/jovanovic/Documents/PhD/Project_Tolerance/Wetlab/ASCTvalresazurin/ASCTvalres.06_mc2_h37Ra_PBS.PAN_repeat/Ranalysis/Results/ASCTvalres.06_Metabolic.Change_d0.14_results.csv")
+
+
+resazurin.log.df <- read.csv("/Users/jovanovic/Documents/PhD/Project_Tolerance/Wetlab/ASCTvalresazurin/ASCTvalres.07_mc2_h37Ra_repeat/Ranalysis/Results/ASCTvalres.07_Metabolic.Change_d0.14_results.csv")
+
+info.mtb.auc <- c("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCT/ASCT_Figures/ASCT_Main_Data/TableS1_MTB_AUC.csv")
+
+resazurin.results.df <- rbind(resazurin.stvd.df,
+                             resazurin.log.df  )
+
+rm(resazurin.log.df ,
+   resazurin.stvd.df )
+
+resazurin.results.df <- resazurin.results.df %>%
+      mutate(Condition = if_else(Condition == "H-E", "E-H", Condition))%>%
+
+mutate(RegimenAbbreviation = gsub("-","",Condition))
+
+
+MTB.resazurin.results.df <- left_join(resazurin.results.df,
+                                      MTB.df)
+
+
+
+```
+
+
+
+
+#4. Association across different MTB model
+
+## Statistics: mann whitney u-test
+```{r}
+
+
+
+# Define the models (formerly outcomes)
+list.of.models <- c("RMM.2021",
+                    "BMM.2021",
+                    "BMM.BHeB.in.C3HeB.FeJ.2021",
+                    "Clinical.2022")
+
+# Define the feature variables
+list.of.variables <- c("pct_change")
+
+# Initialize an empty dataframe to store the results
+list.of.iso <- unique(MTB.resazurin.results.df $Strain)
+iso <- list.of.iso[2]
+list.of.resazurin.incubation <- c("3h", "6h", "12h", "20h", "24h")
+
+model <- list.of.models[2]
+var <-list.of.variables[1]
+
+
+MTB.stats <- data.frame()
+
+# Loop through each Strain
+for (iso in list.of.iso ) {
+  
+  print(iso)
+  # Subset data for the specific Strain
+  MTB.iso <- MTB.resazurin.results.df  %>% filter(Strain == iso)
+  
+  
+ for ( res.inc in list.of.resazurin.incubation ) {
+   
+    print(res.inc)
+    # KEEP MTB.iso intact; filter into a NEW object
+    MTB.iso.res <- MTB.iso %>% 
+      filter(Resazurin.Incubation.Time == res.inc)
+    
+   
+    # Loop through each model (formerly outcome)
+  for (model in list.of.models) {
+    
+         print(model)
+
+    # Apply model-specific transformations inside the loop
+ 
+    # Loop through each variable
+    for (var in list.of.variables) {
+      
+      # Subset and preprocess the data for the current Strain, model, and variable
+      MTB.sub <-MTB.iso.res %>%
+      select(RegimenAbbreviation,
+             Strain,
+          !!sym(model),
+          !!sym(var))%>%
+        drop_na()%>%
+        filter(!!sym(model) != "ND")%>%
+      mutate(!!model := case_when(
+        model == "RMM.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+        model == "BMM.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+        model == "BMM.BHeB.in.C3HeB.FeJ.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+        model == "Clinical.2022" & (!!sym(model) %in% c("C1-")) ~ "Standard of Care",
+        model == "Clinical.2022" & (!!sym(model) %in% c("ND", "C2-")) ~ NA_character_,  # Remove these rows later
+        TRUE ~ "Better than SOC"
+      )) %>%
+        select(                        RegimenAbbreviation,
+
+               all_of(c(model,
+                        var))) %>%
+        drop_na() %>%
+        mutate(
+          across(all_of(model), 
+                 as.factor),  # Convert model column to factor
+          across(all_of(var), as.numeric)    # Ensure variable column is numeric
+        )
+
+      # Ensure at least two groups exist before running the test
+      if (length(unique(MTB.sub[[model]])) > 1) {
+        
+        # Apply the Wilcoxon test using coin::wilcox_test
+        test_result <- coin::wilcox_test(as.formula(paste(var, "~", model)), 
+                                         data = MTB.sub, 
+                                         distribution = "exact")
+        
+        # Extract p-value
+        p_value <- as.numeric(pvalue(test_result))
+        
+        # Dynamically assign the sample size based on the model
+        reference_size <- case_when(
+          model == "RMM.2021" ~ "46",
+          model == "BMM.2021" ~ "58",
+          model == "BMM.BHeB.in.C3HeB.FeJ.2021" ~ "16",
+          model == "Clinical.2022" ~ "15",
+          TRUE ~ "NA"  # Default case
+        )
+        
+        sample.size <- paste(nrow(MTB.sub), "/", reference_size, sep = "")
+
+      
+        # Store results
+        MTB.stats.sub <- data.frame(
+          
+          Strain = iso,
+          Resazurin.Inc.time = res.inc,
+          Metric = var,
+          Model = model,
+          Stat_test = "mwu.test",
+          p.value = p_value,
+          sample.N =     sample.size 
+        )
+        
+        # Append results to the main stats dataframe
+        MTB.stats <- rbind(MTB.stats, MTB.stats.sub)
+      }
+    }
+  }
+   
+ }
+ 
+}
+
+
+rm(test_result,
+   MTB.sub,
+   MTB.stats.sub,
+   MTB.iso)
+```
+
+
+#5 Visualisation
+```{r}
+# Define the models (formerly outcomes)
+list.of.models <- c("RMM.2021",
+                    "BMM.2021",
+                    "BMM.BHeB.in.C3HeB.FeJ.2021",
+                    "Clinical.2022")
+
+# Define the feature variables
+list.of.variables <- c("pct_change")
+
+# Initialize an empty dataframe to store the results
+list.of.iso <- unique(MTB.resazurin.results.df $Strain)
+iso <- list.of.iso[2]
+list.of.resazurin.incubation <- c("3h", "6h", "12h", "20h", "24h")
+
+list.of.Strains <- unique(MTB.resazurin.results.df$Strain)
+
+model <- list.of.models[2]
+var <-list.of.variables[1]
+
+
+# Initialize list for storing plots
+gg.plot.list <- list()
+
+# Loop through each Strain
+for (iso in list.of.Strains) {
+  
+  # Subset data for the specific Strain
+  MTB.iso <- MTB.resazurin.results.df  %>% filter(Strain == iso)
+  
+   for ( res.inc in list.of.resazurin.incubation ) {
+   
+    print(res.inc)
+    # KEEP MTB.iso intact; filter into a NEW object
+    MTB.iso.res <- MTB.iso %>% 
+      filter(Resazurin.Incubation.Time == res.inc)
+    
+
+  # Loop through each model
+  for (model in list.of.models) {
+    
+    # Loop through each feature variable
+    for (var in list.of.variables) {
+      
+      # Subset and preprocess data
+      MTB.sub <- MTB.iso.res %>%
+        select(RegimenAbbreviation, Strain, !!sym(model), !!sym(var)) %>%
+        drop_na() %>%
+        filter(!!sym(model) != "ND") %>%
+        mutate(
+          !!model := case_when(
+            model == "RMM.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+            model == "BMM.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+            model == "BMM.BHeB.in.C3HeB.FeJ.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+            model == "Clinical.2022" & (!!sym(model) %in% c("C1-")) ~ "Standard of Care",
+            model == "Clinical.2022" & (!!sym(model) %in% c("ND", "C2-")) ~ NA_character_,  # Remove these rows
+            TRUE ~ "Better than SOC"
+          )) %>%
+        drop_na() %>%
+        select(RegimenAbbreviation, all_of(c(model, var))) %>%
+        mutate(
+          Outcome = factor(!!sym(model), levels = c("Standard of Care", "Better than SOC")),  # Set factor levels
+          value = !!sym(var)  # Rename for plotting
+        )
+
+      # Add p-values from MTB.stats
+      pval <- MTB.stats %>%
+        filter(Strain == iso, Metric == var, Model == model) %>%
+        pull(p.value)
+      
+      # Add sample size
+      sample.size.N  <- MTB.stats %>%
+        filter(Strain == iso, Metric == var, Model == model) %>%
+        pull(sample.N)
+
+      # Format p-value
+      p_label <- ifelse(length(pval) > 0, ifelse(pval < 0.0001,
+                                                 "P < 0.0001",
+                                                 paste("P =", round(pval, 3))),
+                        "P = NA")
+      
+      # Generate ggplot
+      gg.model <- ggplot(MTB.sub, aes(x = Outcome, y = value, fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA, alpha = 0.5, size = 0.2) +
+        stat_boxplot(geom = "errorbar", width = 0.1, size = 0.1) +
+        geom_jitter(color = "black", size = 0.3, alpha = 1, shape = 20,
+                    position = position_jitter(seed = 1, width = 0.3, height = 0)) +
+        scale_fill_manual(values = c("Standard of Care" = "coral",
+                                     "Better than SOC" = "darkgreen")) +
+        scale_y_continuous(limits = c(-300, 300), breaks = seq(-300, 300, by = 50)) +
+        labs(
+          x = "",
+          y = paste(iso, "\n", var, sep = ""),
+          title = paste(model, "-", iso),  # Plot title
+          subtitle = paste(p_label, "   n:", sample.size.N, sep = "")
+        ) +
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          plot.title = element_text(size = 8, face = "bold"),   # Reduce title size
+          plot.subtitle = element_text(size = 7),  # Reduce subtitle size
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          aspect.ratio = 1,
+          axis.text = element_text(size = 6),
+          axis.title = element_text(size = 6)
+        )
+
+      # Store the plot in the list
+      plot_key <- paste(iso,res.inc, var, model, sep = " strain: ")
+      gg.plot.list[[plot_key]] <- gg.model
+      
+      # Cleanup
+      rm(gg.model, pval, p_label, MTB.sub)
+    }
+  }
+}
+}
+
+
+
+
+```
+
+
+
+
+
+```{r}
+#Housekeeping
+rm(combined_plot,
+   final_plot_list,
+   gg.plot.list,
+   MTB.iso,
+   plots_rmm,
+   plots_clinical,
+   plots_bmm_bheb,
+   plots_bmm,
+   CFU.correlation.df,
+   iso,
+   list.of.iso,
+   list.of.models,
+   list.of.resazurin.incubation,
+   list.of.Strains,
+   list.of.variables,
+   model,
+   p_value,
+   plot_key,
+   reference_size,
+   res.inc,
+   sample.size,
+   sample.size.N,
+   strains,
+   t,
+   var,
+   MTB.df,
+   MTB.iso.res,
+   resazurin.results.df)
+```
+
+#5. Figure plot for paper 
+
+## 5.1 Metabolic time curve
+
+```{r}
+
+log.strain.meanRFU.df <- read.csv("/Users/jovanovic/Documents/PhD/Project_Tolerance/Wetlab/ASCTvalresazurin/ASCTvalres.06_mc2_h37Ra_PBS.PAN_repeat/Ranalysis/Results/ASCTvalres.06_meanRFU_MetabolicCurve.csv")
+
+log.strain.normRFU.df <- read.csv("/Users/jovanovic/Documents/PhD/Project_Tolerance/Wetlab/ASCTvalresazurin/ASCTvalres.06_mc2_h37Ra_PBS.PAN_repeat/Ranalysis/Results/ASCTvalres.06_Normalised_MetabolicCurve.csv")
+
+
+starved.strain.meanRFU.df <- read.csv("/Users/jovanovic/Documents/PhD/Project_Tolerance/Wetlab/ASCTvalresazurin/ASCTvalres.07_mc2_h37Ra_repeat/Ranalysis/Results/ASCTvalres.07_meanRFU_MetabolicCurve.csv")
+
+starved.strain.normRFU.df <- read.csv("/Users/jovanovic/Documents/PhD/Project_Tolerance/Wetlab/ASCTvalresazurin/ASCTvalres.07_mc2_h37Ra_repeat/Ranalysis/Results/ASCTvalres.07_Normalised_MetabolicCurve.csv")
+
+
+Metabolic.Curve.df <- left_join(log.strain.meanRFU.df ,
+                                log.strain.normRFU.df)
+
+
+Metabolic.Curve.df2 <- left_join(starved.strain.meanRFU.df ,
+                                starved.strain.normRFU.df)
+
+
+Metabolic.Curve.df  <- rbind(Metabolic.Curve.df ,
+                             Metabolic.Curve.df2 )
+
+#Houskeeping
+rm(Metabolic.Curve.df2,
+   log.strain.meanRFU.df,
+   log.strain.normRFU.df,
+   starved.strain.meanRFU.df,
+   starved.strain.normRFU.df)
+```
+
+### 5.1.1 Metabolic time curve plot
+
+
+
+#### Abs Mean RFU over time
+```{r}
+# library(dplyr)
+# library(ggplot2)
+# library(ggh4x)
+# library(wesanderson)
+# library(scales)
+# library(ggpubr)   # for theme_pubr()
+# library(grid)
+# 
+# 
+# # 1) Your Okabe‐Ito colours
+# okabe_ito_vals <- c(
+#   h37     = "#FF6B35",
+#   h37PBS  = "#FFA65D",
+#   mc2     = "#191970",
+#   mc2PAN  = "#00BFFF",
+#   mc2PBS  = "steelblue"
+# )
+# 
+# # 2) Open A4‐portrait PDF
+# pdf(
+#   file    = file.path(info.res, "ASCTvalres_AbsmeanRFU.pdf"),
+#   width   = 8.3,
+#   height  = 11.7,
+#   onefile = TRUE
+# )
+# 
+# # 3) Single ggplot call with ggh4x::facet_wrap2()
+# p <- Metabolic.Curve.df %>%
+#   filter(Time.day != 3) %>%
+#   mutate(Condition = gsub("-","",Condition))%>%
+#   ggplot(aes(Time.day, meanRFU, color = Strain)) +
+#   
+#   # error bars, lines, points
+#   geom_errorbar(aes(ymin = meanRFU - semRFU, ymax = meanRFU + semRFU),
+#                  width = 0.5,
+#                 size = 0.2) +
+#   geom_line(data = . %>% group_by(Strain, Condition) %>% filter(n() > 1),
+#             size = 0.4) +
+#   geom_point(size = 0.5,
+#              stroke = 0) +
+#   
+#   # colour scale & shared legend
+#   scale_color_manual(values = okabe_ito_vals) +
+#   guides(color = guide_legend(nrow = 1, byrow = TRUE, 
+#                               override.aes = list(size = 2, alpha = 1))) +
+#   
+#   # axes limits & breaks
+#   coord_cartesian(ylim = c(0, 400000)) +
+#   scale_y_continuous(breaks = seq(0, 400000, 100000), labels = comma) +
+#   scale_x_continuous(breaks = c(0, 7, 14)) +
+#   
+#   # labels
+#   labs(
+#     x     = "Time (days)",
+#     y     = "RFU background corrected (mean ± SEM)",
+#     color = "Strain"
+#   ) +
+#   
+#   # theming: hide all tick‐labels, restore only outer margins
+#   theme_pubr() +
+#   theme(
+#     aspect.ratio       = 0.75,
+#     legend.position    = "bottom",
+#     strip.background   = element_blank(),
+#     strip.text         = element_text(size = 7),
+#     panel.spacing      = unit(1, "lines"),
+#     
+#     axis.text          = element_blank(),
+#     axis.text.y.left   = element_text(size = 7),
+#     axis.text.x.bottom = element_text(size = 7),
+#     
+#     axis.ticks         = element_blank(),
+#     #axis.ticks.length  = unit(1, "mm"),
+#     axis.line          = element_line(size = 0.3)
+#   ) +
+#   
+#   # 11 × 6 grid, axes on every panel, equal sizing
+#   ggh4x::facet_wrap2(
+#     ~ Condition,
+#     nrow   = 11,
+#     ncol   = 6,
+#     scales = "fixed",
+#     axes   = "all"
+#   )
+# 
+# print(p)
+# dev.off()
+
+```
+
+#### Normalised RFU over time
+```{r}
+
+library(dplyr)
+library(ggplot2)
+library(ggh4x)
+library(wesanderson)
+library(scales)
+library(ggpubr)   # for theme_pubr()
+library(grid)
+
+
+# # 1) Your Okabe‐Ito colours
+# okabe_ito_vals <- c(
+#   h37     = "#FF6B35",
+#   h37PBS  = "#FFA65D",
+#   mc2     = "#191970",
+#   mc2PAN  = "#00BFFF",
+#   mc2PBS  = "grey"
+# )
+# 
+# # 2) Open A4‐portrait PDF
+# pdf(
+#   file    = file.path(info.res, "ASCTvalres_normRFU.pdf"),
+#   width   = 8.3,
+#   height  = 11.7,
+#   onefile = TRUE
+# )
+# 
+# # 3) Single ggplot call with ggh4x::facet_wrap2()
+# p <- Metabolic.Curve.df %>%
+#   filter(Time.day != 3) %>%
+#   mutate(Condition = gsub("-","",Condition))%>%
+#   ggplot(aes(Time.day, RFU_norm, color = Strain)) +
+#   
+#   # error bars, lines, points
+#   geom_errorbar(aes(ymin = RFU_norm - SEM_norm, ymax = RFU_norm + SEM_norm),
+#                   width = 0.5,
+#                 size = 0.2) +
+#   geom_line(data = . %>% group_by(Strain, Condition) %>% filter(n() > 1),
+#             size = 0.4) +
+#   geom_point(size = 0.5,
+#              stroke = 0) +
+#   
+#   # colour scale & shared legend
+#   scale_color_manual(values = okabe_ito_vals) +
+#   guides(color = guide_legend(nrow = 1, byrow = TRUE, 
+#                               override.aes = list(size = 2, alpha = 1))) +
+#   
+#   # axes limits & breaks
+#   coord_cartesian(ylim = c(0, 4)) +
+#   scale_y_continuous(breaks = seq(0, 4, 1), labels = comma) +
+#   scale_x_continuous(breaks = c(0, 7, 14)) +
+#   
+#   # labels
+#   labs(
+#     x     = "Time (days)",
+#     y     = "normalised RFU (mean ± SEM)",
+#     color = "Strain"
+#   ) +
+#   
+#   # theming: hide all tick‐labels, restore only outer margins
+#   theme_pubr() +
+#   theme(
+#     aspect.ratio       = 0.75,
+#     legend.position    = "bottom",
+#     strip.background   = element_blank(),
+#     strip.text         = element_text(size = 7),
+#     panel.spacing      = unit(1, "lines"),
+#     
+#     axis.text          = element_blank(),
+#     axis.text.y.left   = element_text(size = 7),
+#     axis.text.x.bottom = element_text(size = 7),
+#     
+#     axis.ticks         = element_blank(),
+#     #axis.ticks.length  = unit(1, "mm"),
+#     axis.line          = element_line(size = 0.3)
+#   ) +
+#   
+#   # 11 × 6 grid, axes on every panel, equal sizing
+#   ggh4x::facet_wrap2(
+#     ~ Condition,
+#     nrow   = 11,
+#     ncol   = 6,
+#     scales = "fixed",
+#     axes   = "all"
+#   )
+# 
+# print(p)
+# dev.off()
+
+```
+
+### Normalised RFU over time supp fig chpt
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggh4x)
+library(ggpubr)
+
+# 1) Your Okabe‐Ito colours
+okabe_ito_vals <- c(
+  h37     = "#FF6B35",
+  h37PBS  = "#FFA65D",
+  mc2     = "#191970",
+  mc2PAN  = "#00BFFF",
+  mc2PBS  = "grey"
+)
+
+# # 2) Build the plot object
+# p <- Metabolic.Curve.df %>%
+#   filter(Time.day != 3) %>%
+#   mutate(Condition = gsub("-", "", Condition)) %>%
+#   ggplot(aes(Time.day, RFU_norm, color = Strain)) +
+#   
+#     # geoms with slimmer defaults
+#     geom_errorbar(aes(ymin = RFU_norm - SEM_norm,
+#                       ymax = RFU_norm + SEM_norm),
+#                   size = 0.3, width = 0.2) +
+#     geom_line(size = 0.3) +
+#     geom_point(size = 2, stroke = 0) +
+#   
+#     # colour & legend
+#     scale_color_manual(values = okabe_ito_vals) +
+#     guides(color = guide_legend(
+#       nrow = 1, byrow = TRUE,
+#       override.aes = list(size = 2, alpha = 1)
+#     )) +
+#   
+#     # axes limits & breaks
+#     coord_cartesian(ylim = c(0, 4)) +
+#     scale_y_continuous(breaks = seq(0, 4, 1)) +
+#     scale_x_continuous(breaks = c(0, 7, 14)) +
+#   
+#     # labels
+#     labs(
+#       x     = "Time (days)",
+#       y     = "normalised RFU (mean ± SEM)",
+#       color = "Strain"
+#     ) +
+#   
+#     # your exact theming
+#     theme_pubr() +
+#     theme(
+#       aspect.ratio       = 0.75,
+#       legend.position    = "bottom",
+#       strip.background   = element_blank(),
+#       strip.text         = element_text(size = 7),
+#       panel.spacing      = unit(1, "lines"),
+#       
+#       axis.text          = element_blank(),
+#       axis.text.y.left   = element_text(size = 7),
+#       axis.text.x.bottom = element_text(size = 7),
+#       
+#       axis.ticks         = element_blank(),
+#       axis.line          = element_line(size = 0.3)
+#     ) +
+#   
+#     # all 66 panels on one page
+#     ggh4x::facet_wrap2(
+#       ~ Condition,
+#       nrow   = 11,
+#       ncol   = 6,
+#       scales = "fixed",
+#       axes   = "all"
+#     )
+# 
+# # 3a) Open a PDF device with useDingbats = FALSE
+# pdf(
+#   file       = "supplementary_figure.pdf",
+#   width      = 11.7,    # A4 landscape
+#   height     = 8.3,
+#   useDingbats = FALSE
+# )
+# 
+# # Print your plot
+# print(p)
+# 
+# # Close the device
+# dev.off()
+
+```
+
+
+
+#### Association with outcome boxplots v
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggpubr)   # for ggarrange, annotate_figure
+library(grid)     # for textGrob()
+
+# 1) Define the models & variables
+list.of.models               <- c(
+  "RMM.2021",
+  "BMM.2021",
+  "BMM.BHeB.in.C3HeB.FeJ.2021",
+  "Clinical.2022"
+)
+list.of.variables            <- c("pct_change")
+list.of.resazurin.incubation <- c("12h")
+list.of.Strains              <- unique(MTB.resazurin.results.df$Strain)
+
+# 2) Prepare an empty list
+gg.plot.list <- list()
+# 
+# # 3) Loop through each Strain / incubation / model / var
+# for (iso in list.of.Strains) {
+#   MTB.iso <- MTB.resazurin.results.df %>% filter(Strain == iso)
+#   
+#   for (res.inc in list.of.resazurin.incubation) {
+#     MTB.iso.res <- MTB.iso %>% filter(Resazurin.Incubation.Time == res.inc)
+#     
+#     for (model in list.of.models) {
+#       for (var in list.of.variables) {
+#         # --- subset & factor prep ---
+#         MTB.sub <- MTB.iso.res %>%
+#           select(RegimenAbbreviation, Strain, !!sym(model), !!sym(var)) %>%
+#           drop_na() %>%
+#           filter(!!sym(model) != "ND") %>%
+#           mutate(
+#             !!model := case_when(
+#               model == "RMM.2021" &
+#                 (!!sym(model) %in% c("C0","-C1","-C2")) ~ "Standard of Care",
+#               model == "BMM.2021" &
+#                 (!!sym(model) %in% c("C0","-C1","-C2")) ~ "Standard of Care",
+#               model == "BMM.BHeB.in.C3HeB.FeJ.2021" &
+#                 (!!sym(model) %in% c("C0","-C1","-C2")) ~ "Standard of Care",
+#               model == "Clinical.2022" &
+#                 (!!sym(model) %in% c("C1-")) ~ "Standard of Care",
+#               model == "Clinical.2022" &
+#                 (!!sym(model) %in% c("ND","C2-")) ~ NA_character_,
+#               TRUE ~ "Better than SOC"
+#             )
+#           ) %>%
+#           drop_na() %>%
+#           select(RegimenAbbreviation, all_of(c(model, var))) %>%
+#           mutate(
+#             Outcome = factor(!!sym(model),
+#                              levels = c("Standard of Care","Better than SOC")),
+#             value   = !!sym(var)
+#           )
+#         
+#         # --- pull & format p-value + sample size ---
+#         stats_row <- MTB.stats %>%
+#           filter(
+#             Strain             == iso,
+#             Model              == model,
+#             Resazurin.Inc.time == res.inc,
+#             Metric             == var
+#           )
+#         pval_vec <- stats_row %>% pull(p.value)
+#         pval     <- if (length(pval_vec) >= 1) pval_vec[1] else NA_real_
+#         p_str    <- if (is.na(pval)) "NA" else formatC(pval, format="f", digits=4)
+#       
+#         
+#         annot_label <- paste0(p_str)
+#         
+#         # --- compute bracket positions ---
+#         y_max  <- max(MTB.sub$value, na.rm = TRUE)
+#         y_bar  <- y_max * 1.02
+#         y_tip  <- y_max * 1
+#         y_text <- y_max * 1.06
+#         
+#         
+#         # --- build the ggplot ---
+#         gg.model <- ggplot(MTB.sub, aes(x = Outcome, 
+#                                         y = value,
+#                                         fill = Outcome)) +
+#           geom_boxplot(
+#             outlier.shape = NA,
+#             alpha          = 1,
+#             size           = 0.2,
+#             width          = 0.5
+#           ) +
+#           stat_boxplot(geom = "errorbar", 
+#                        width = 0.1, 
+#                        size = 0.5) +
+#           geom_jitter(
+#             size     = 0.5,
+#             shape = 21,
+#             color    = "black",
+#             fill = "black",
+#             position = position_jitter(seed = 1, width = 0.3, height = 0)
+#           ) +
+#           scale_fill_manual(
+#             name   = "In vivo classification of drug regimens\nbased on mouse / human outcomes:",
+#             values = c(
+#               "Standard of Care" = "#CD5B45",
+#               "Better than SOC"  = "#43A1A0"
+#             ),
+#             labels = c(
+#               "Standard of Care" = "Similar to standard-of-care",
+#               "Better than SOC"  = "Better than standard-of-care"
+#             )
+#           ) +
+#           scale_color_manual(
+#             guide  = "none",
+#             values = c(
+#               "Standard of Care" = "#CD5B45",
+#               "Better than SOC"  = "#43A1A0"
+#             )
+#           ) +
+#           # draw the bracket & label
+#           annotate("segment", x = 1, xend = 2, y = y_bar, yend = y_bar, size = 0.2) +
+#           annotate("segment", x = 1, xend = 1, y = y_bar, yend = y_tip, size = 0.2) +
+#           annotate("segment", x = 2, xend = 2, y = y_bar, yend = y_tip, size = 0.2) +
+#           annotate("text",    x = 1.5, y = y_text, label = annot_label,
+#                    size = 3, vjust = 0) +
+#           # scale_y_continuous(limits = c(-100, 200),
+#           #                    breaks = seq(-100, 200, by = 100)) +
+#           labs(
+#             x        = NULL,
+#             y        = paste(iso, "\n", var, sep = ""),
+#             title    = paste(model, "-", iso),
+#             subtitle = NULL
+#           ) +
+#   theme_pubr() +
+#   theme(
+#     aspect.ratio       = 1,
+#     legend.position    = "bottom",
+#     strip.background   = element_blank(),
+#     strip.text         = element_text(size = 7),
+#     panel.spacing      = unit(1, "lines"),
+#     
+#     axis.text          = element_blank(),
+#     axis.text.y.left   = element_text(size = 9),
+#     axis.text.x.bottom = element_blank(),
+#     
+#     axis.ticks         = element_blank(),
+#     #axis.ticks.length  = unit(1, "mm"),
+#     axis.line          = element_line(size = 0.3)
+#   ) 
+#         
+#         # --- store it ---
+#         plot_key <- paste(iso, res.inc, var, model, sep = " strain: ")
+#         gg.plot.list[[plot_key]] <- gg.model
+#       }
+#     }
+#   }
+# }
+# 
+# # 4) Arrange & save to multi‐page PDF
+# strains       <- c("h37","h37PBS","mc2","mc2PAN","mc2PBS")
+# plots_rmm      <- gg.plot.list[grep("RMM\\.2021$", names(gg.plot.list))]
+# plots_bmm      <- gg.plot.list[grep("BMM\\.2021$", names(gg.plot.list))]
+# plots_bmm_bheb <- gg.plot.list[
+#   grep("BMM\\.BHeB\\.in\\.C3HeB\\.FeJ\\.2021$", names(gg.plot.list))
+# ]
+# plots_clinical <- gg.plot.list[grep("Clinical\\.2022$", names(gg.plot.list))]
+# 
+# get_plot <- function(model_list, time, strain) {
+#   nm  <- names(model_list)
+#   idx <- grep(paste0("^", strain, " .*", time, " "), nm)
+#   if (length(idx) != 1) stop("Unexpected number of plots")
+#   model_list[[idx]]
+# }
+# 
+# make_page <- function(time) {
+#   page_plots <- unlist(lapply(strains, function(s) {
+#     list(
+#       get_plot(plots_rmm,      time, s),
+#       get_plot(plots_bmm,      time, s),
+#       get_plot(plots_bmm_bheb, time, s),
+#       get_plot(plots_clinical, time, s)
+#     )
+#   }), recursive = FALSE)
+#   
+#   ggarrange(
+#     plotlist      = page_plots,
+#     ncol          = 4,
+#     nrow          = 5,
+#     common.legend = TRUE,
+#     legend        = "bottom"
+#   ) %>%
+#     annotate_figure(
+#       top = textGrob(
+#         paste("Resazurin incubation:", time),
+#         gp = gpar(fontsize = 10, fontface = "bold")
+#       )
+#     )
+# }
+# 
+# output_pdf <- file.path(info.res, "MetabolicActivity_Outcome_v1.pdf")
+# pdf(output_pdf, width = 14, height = 14)
+# for (t in list.of.resazurin.incubation) {
+#   print(make_page(t))
+# }
+# dev.off()
+# cat("✅ Saved PDF as:", output_pdf, "\n")
+
+```
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+library(ggpubr)   # for ggarrange, annotate_figure
+library(grid)     # for textGrob()
+
+# 1) Define the models & variables
+list.of.models               <- c(
+  "RMM.2021",
+  "BMM.2021",
+  "BMM.BHeB.in.C3HeB.FeJ.2021",
+  "Clinical.2022"
+)
+list.of.variables            <- c("pct_change")
+list.of.resazurin.incubation <- c("12h")
+list.of.Strains              <- unique(MTB.resazurin.results.df$Strain)
+
+# 2) Prepare an empty list
+gg.plot.list <- list()
+
+# 3) Loop through each Strain / incubation / model / var
+for (iso in list.of.Strains) {
+  MTB.iso <- MTB.resazurin.results.df %>% filter(Strain == iso)
+
+  for (res.inc in list.of.resazurin.incubation) {
+    MTB.iso.res <- MTB.iso %>% filter(Resazurin.Incubation.Time == res.inc)
+
+    for (model in list.of.models) {
+      for (var in list.of.variables) {
+        # --- subset & factor prep ---
+        MTB.sub <- MTB.iso.res %>%
+          select(RegimenAbbreviation, Strain, !!sym(model), !!sym(var)) %>%
+          drop_na() %>%
+          filter(!!sym(model) != "ND") %>%
+          mutate(
+            !!model := case_when(
+              model == "RMM.2021" &
+                (!!sym(model) %in% c("C0","-C1","-C2")) ~ "Standard of Care",
+              model == "BMM.2021" &
+                (!!sym(model) %in% c("C0","-C1","-C2")) ~ "Standard of Care",
+              model == "BMM.BHeB.in.C3HeB.FeJ.2021" &
+                (!!sym(model) %in% c("C0","-C1","-C2")) ~ "Standard of Care",
+              model == "Clinical.2022" &
+                (!!sym(model) %in% c("C1-")) ~ "Standard of Care",
+              model == "Clinical.2022" &
+                (!!sym(model) %in% c("ND","C2-")) ~ NA_character_,
+              TRUE ~ "Better than SOC"
+            )
+          ) %>%
+          drop_na() %>%
+          select(RegimenAbbreviation, all_of(c(model, var))) %>%
+          mutate(
+            Outcome = factor(!!sym(model),
+                             levels = c("Standard of Care","Better than SOC")),
+            value   = !!sym(var)
+          )
+
+        # --- pull & format p-value + sample size ---
+        stats_row <- MTB.stats %>%
+          filter(
+            Strain             == iso,
+            Model              == model,
+            Resazurin.Inc.time == res.inc,
+            Metric             == var
+          )
+        pval_vec <- stats_row %>% pull(p.value)
+        pval     <- if (length(pval_vec) >= 1) pval_vec[1] else NA_real_
+        p_str    <- if (is.na(pval)) "NA" else formatC(pval, format="f", digits=4)
+
+
+        annot_label <- paste0(p_str)
+
+# --- compute bracket positions robustly ---
+y_vals  <- MTB.sub$value
+y_max   <- max(y_vals, na.rm = TRUE)
+y_min   <- min(y_vals, na.rm = TRUE)
+y_range <- y_max - y_min
+
+# how tall you want your bracket above the data:
+offset_bar  <- y_range * 0.05
+# how long the little vertical “tips” should be:
+offset_tip  <- y_range * 0.02
+# how much higher you want your text above the bracket:
+offset_text <- y_range * 0.03
+
+y_bar  <- y_max + offset_bar     # horizontal line at this height
+y_tip  <- y_bar - offset_tip     # tips will reach down to here
+y_text <- y_bar + offset_text    # label sits above the bar
+     gg.model <- ggplot(MTB.sub, aes(x = Outcome, y = value, fill = Outcome)) +
+
+      geom_boxplot(
+            outlier.shape = NA,
+            alpha          = 1,
+            size           = 0.2,
+            width          = 0.5
+          ) +
+          stat_boxplot(geom = "errorbar",
+                       width = 0.1,
+                       size = 0.5) +
+          geom_jitter(
+            size     = 0.5,
+            shape = 21,
+            color    = "black",
+            fill = "black",
+            position = position_jitter(seed = 1, width = 0.1, height = 0)
+          ) +
+
+  # 3) your custom p‐value label
+  annotate(
+    "text",
+    x     = 1.5,
+    y     = y_text,
+    label = annot_label,
+    size  = 3,
+    vjust = 0
+  ) +
+   # thicker horizontal bracket and tips, but with flush (butt) ends
+  annotate(
+    "segment",
+    x       = 1,    xend   = 2,
+    y       = y_bar, yend   = y_bar,
+    size    = 0.7,
+    lineend = "butt"
+  ) +
+  annotate(
+    "segment",
+    x       = 1,    xend   = 1,
+    y       = y_bar, yend   = y_tip,
+    size    = 0.7,
+    lineend = "butt"
+  ) +
+  annotate(
+    "segment",
+    x       = 2,    xend   = 2,
+    y       = y_bar, yend   = y_tip,
+    size    = 0.7,
+    lineend = "butt"
+  ) +
+
+  # 4) your colour scales, labels, themes, etc.
+  scale_fill_manual(
+    name   = "In vivo classification of drug regimens\nbased on mouse / human outcomes:",
+    values = c(
+      "Standard of Care" = "#CD5B45",
+      "Better than SOC"  = "#43A1A0"
+    ),
+    labels = c(
+      "Standard of Care" = "Similar to standard-of-care",
+      "Better than SOC"  = "Better than standard-of-care"
+    )
+  ) +
+  labs(
+    x     = NULL,
+    y     = paste(iso, "\n", var, sep = ""),
+    title = paste(model, "-", iso)
+  ) +
+  theme_pubr() +
+  theme(
+    aspect.ratio       = 0.75,
+    legend.position    = "bottom",
+    strip.background   = element_blank(),
+    strip.text         = element_text(size = 7),
+    panel.spacing      = unit(1, "lines"),
+
+    axis.text          = element_blank(),
+    axis.text.y.left   = element_text(size = 7),
+    axis.text.x.bottom = element_text(size = 7),
+
+    axis.ticks         = element_blank(),
+    axis.line          = element_line(size = 0.3)
+  )
+
+
+        # --- store it ---
+        plot_key <- paste(iso, res.inc, var, model, sep = " strain: ")
+        gg.plot.list[[plot_key]] <- gg.model
+      }
+    }
+  }
+}
+
+# 4) Arrange & save to multi‐page PDF
+strains       <- c("h37","h37PBS","mc2","mc2PAN","mc2PBS")
+plots_rmm      <- gg.plot.list[grep("RMM\\.2021$", names(gg.plot.list))]
+plots_bmm      <- gg.plot.list[grep("BMM\\.2021$", names(gg.plot.list))]
+plots_bmm_bheb <- gg.plot.list[
+  grep("BMM\\.BHeB\\.in\\.C3HeB\\.FeJ\\.2021$", names(gg.plot.list))
+]
+plots_clinical <- gg.plot.list[grep("Clinical\\.2022$", names(gg.plot.list))]
+
+get_plot <- function(model_list, time, strain) {
+  nm  <- names(model_list)
+  idx <- grep(paste0("^", strain, " .*", time, " "), nm)
+  if (length(idx) != 1) stop("Unexpected number of plots")
+  model_list[[idx]]
+}
+
+make_page <- function(time) {
+  page_plots <- unlist(lapply(strains, function(s) {
+    list(
+      get_plot(plots_rmm,      time, s),
+      get_plot(plots_bmm,      time, s),
+      get_plot(plots_bmm_bheb, time, s),
+      get_plot(plots_clinical, time, s)
+    )
+  }), recursive = FALSE)
+
+  ggarrange(
+    plotlist      = page_plots,
+    ncol          = 4,
+    nrow          = 5,
+    common.legend = TRUE,
+    legend        = "bottom"
+  ) %>%
+    annotate_figure(
+      top = textGrob(
+        paste("Resazurin incubation:", time),
+        gp = gpar(fontsize = 10, fontface = "bold")
+      )
+    )
+}
+
+output_pdf <- file.path(info.res, "MetabolicActivity_Outcome_v2-THESIS.pdf")
+pdf(output_pdf, width = 14, height = 14)
+for (t in list.of.resazurin.incubation) {
+  print(make_page(t))
+}
+dev.off()
+cat("✅ Saved PDF as:", output_pdf, "\n")
+
+```
+
+
+## Exporting results table
+
+### metabolic activity
+```{r}
+
+Abbv.regimen <- MTB.iso.res %>%
+  select(Condition,
+         RegimenAbbreviation,
+         RegimenName)
+  
+  
+Export.metabolic.curve.data <- Metabolic.Curve.df %>%
+  left_join(Abbv.regimen )%>%
+  mutate(normRFU = RFU_norm,
+         norm.sem.RFU = SEM_norm)%>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         Strain,
+         Time.day,
+         meanRFU,
+         semRFU,
+         normRFU,
+         norm.sem.RFU)
+
+
+Export.metabolic.curve.data <- Metabolic.Curve.df %>%
+  left_join(Abbv.regimen) %>%
+  # override PosCtrl name
+  mutate(
+    RegimenName   = if_else(RegimenAbbreviation == "PosCtrl", "media", RegimenName),
+    normRFU       = RFU_norm,
+    norm.sem.RFU  = SEM_norm
+  ) %>%
+  select(RegimenAbbreviation, RegimenName, Strain, Time.day,
+         meanRFU, semRFU, normRFU, norm.sem.RFU) %>%
+  pivot_wider(
+    id_cols     = c(RegimenAbbreviation, RegimenName),
+    names_from  = c(Strain, Time.day),
+    values_from = c(meanRFU, semRFU, normRFU, norm.sem.RFU),
+    names_glue  = "{Strain}_{.value}_d{Time.day}"
+  )
+
+
+Export.metabolic.curve.data <- Export.metabolic.curve.data %>%
+  rename_with(
+    .cols = everything(),
+    .fn   = ~ str_replace_all(
+      .x,
+      # named vector of patterns → replacements
+      c(
+        # specific starvation prefixes
+        "^mc2PBS_" = "mc27000_PBSstarved_",
+        "^mc2PAN_" = "mc27000_PAstarved_",
+        "^h37PBS_" = "H37Ra_PBSstarved_",
+        "^h37PAN_" = "H37Ra_PAstarved_",
+        # then the general “logGrowth” prefixes
+        "^mc2_"    = "mc27000_logGrowth_",
+        "^h37_"    = "H37Ra_logGrowth_"
+      )
+    )
+  )
+
+# write.csv(Export.metabolic.curve.data , 
+#           paste(info.res,
+#                 "/SuppData_Resazurin.Metabolic.Activity.data.csv",
+#                 sep=""),
+#           row.names = FALSE)
+# str(Export.metabolic.curve.data)
+```
+
+
+RMM 2021	BMM 2021	BMM-BHeB in C3HeB/FeJ 2021	Clinical 2022
+### percentage change d0 to d14
+```{r}
+Export.metabolic.pctchange.d0.d14.data <- MTB.resazurin.results.df %>%
+  filter(Resazurin.Incubation.Time =="12h")%>%
+  left_join(Abbv.regimen) %>%
+  # rename + override PosCtrl
+  mutate(
+    pctChange_d0_d14_RFU = pct_change,
+    RegimenName = if_else(RegimenAbbreviation == "PosCtrl", "media", RegimenName)
+  ) %>%
+  # ensure exactly one row per Regimen × Strain
+  distinct(RegimenAbbreviation, RegimenName, Strain, pctChange_d0_d14_RFU) %>%
+  # pivot so each Strain becomes its own column
+  pivot_wider(
+    id_cols     = c(RegimenAbbreviation, RegimenName),
+    names_from  = Strain,
+    values_from = pctChange_d0_d14_RFU,
+    names_glue  = "{Strain}_pctChange_d0_d14_RFU"
+  )
+
+
+
+Abbv.regimen <- MTB.iso.res %>%
+  select(Condition,
+         RegimenAbbreviation,
+         RegimenName,
+         RMM.2021,
+         BMM.2021,
+         BMM.BHeB.in.C3HeB.FeJ.2021,
+         Clinical.2022)
+
+
+Export.metabolic.pctchange.d0.d14.data <- left_join(Export.metabolic.pctchange.d0.d14.data ,
+                                                    Abbv.regimen)
+
+Export.metabolic.pctchange.d0.d14.data <-Export.metabolic.pctchange.d0.d14.data %>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         h37_pctChange_d0_d14_RFU,
+         h37PBS_pctChange_d0_d14_RFU,
+         mc2_pctChange_d0_d14_RFU,
+         mc2PBS_pctChange_d0_d14_RFU,
+         mc2PAN_pctChange_d0_d14_RFU,
+         RMM.2021,
+         BMM.2021,
+         BMM.BHeB.in.C3HeB.FeJ.2021,
+         Clinical.2022)
+
+Export.metabolic.pctchange.d0.d14.data <-Export.metabolic.pctchange.d0.d14.data %>%
+
+  rename_with(
+    .cols = everything(),
+    .fn   = ~ str_replace_all(
+      .x,
+      # named vector of patterns → replacements
+      c(
+        # specific starvation prefixes
+        "^mc2PBS_" = "mc27000_PBSstarved_",
+        "^mc2PAN_" = "mc27000_PAstarved_",
+        "^h37PBS_" = "H37Ra_PBSstarved_",
+        "^h37PAN_" = "H37Ra_PAstarved_",
+        # then the general “logGrowth” prefixes
+        "^mc2_"    = "mc27000_logGrowth_",
+        "^h37_"    = "H37Ra_logGrowth_"
+      )
+    )
+  )
+
+
+str(Export.metabolic.pctchange.d0.d14.data)
+
+Export.metabolic.pctchange.d0.d14.data <- Export.metabolic.pctchange.d0.d14.data %>%
+  rename(
+    `RMM 2021`        = RMM.2021,
+    `BMM 2021`        = BMM.2021,
+    `C3HeB/FeJ 2021`  = BMM.BHeB.in.C3HeB.FeJ.2021,
+    `Clinical 2022`   = Clinical.2022
+  )
+
+# 
+# write.csv(Export.metabolic.pctchange.d0.d14.data , 
+#           paste(info.res,
+#                 "/SuppData_Resazurin.Metabolic.Activity.pctchange.d0.d14.csv",
+#                 sep=""),
+#           row.names = FALSE)
+# str(Export.metabolic.curve.data)
+
+
+```
+
+# Houskeeping
+```{r}
+rm(Abbv.regimen,
+   gg.model,
+   gg.plot.list,
+   Metabolic.Curve.df,
+   MTB.iso,
+   MTB.iso.res,
+   MTB.resazurin.results.df,
+   MTB.stats,
+   MTB.sub,
+   p,
+   plots_bmm,
+   plots_bmm_bheb,
+   plots_clinical,
+   plots_rmm,
+   stats_row)
+```
+
+
+
+```{r}
+
+MTB.Metabolic.df <- Export.metabolic.pctchange.d0.d14.data%>%
+  filter(RegimenName != "media")
+
+MTB.ASCTauc.df <- read.csv(info.mtb.auc)
+
+MTB.ASCTauc.df <- MTB.ASCTauc.df %>%
+  select(
+         -RMM.2021,
+         -BMM.2021,
+         -BMM.BHeB.in.C3HeB.FeJ.2021,
+         -Clinical.2022
+         )
+
+MTB.Metabolic.ASCTauc.df <- left_join(MTB.ASCTauc.df ,
+                                     MTB.Metabolic.df  )
+
+MTB.Metabolic.ASCTauc.df <- MTB.Metabolic.ASCTauc.df %>%
+  select(-`RMM 2021`,
+         -`BMM 2021`,
+         -`C3HeB/FeJ 2021`,
+         -`Clinical 2022`)
+
+rm(MTB.Metabolic.df ,
+   MTB.ASCTauc.df)
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(broom)
+library(ggprism)
+
+# Correlation label function using raw (linear) AUC
+correlation_label <- function(x, y) {
+  df <- data.frame(x = x, y = y)
+  model <- lm(y ~ x, data = df)
+  model_summary <- glance(model)
+  r_squared <- round(model_summary$r.squared, 4)
+  p_value <- signif(model_summary$p.value, 3)
+  r_value <- round(cor(df$x, df$y, use = "complete.obs"), 2)
+  paste0("italic(R) == ", r_value,
+         " ~ ',' ~ italic(R^2) == ", r_squared,
+         " ~ ',' ~ italic(p) == ", p_value)
+}
+
+# Only mc27000 log growth
+label_map <- list("mc27000_logGrowth" = "mc27000 log growth")
+var_pairs <- list(c("mc27000_logGrowth.AUC.", "mc27000_logGrowth_pctChange_d0_d14_RFU"))
+
+# Regimens to highlight by RegimenAbbreviation (exact matches)
+highlight_palette <- c(
+  "HR"   = "#191970", # HR navy
+  "EHRZ" = "#00BFFF", # HREZ blue
+  "BLPa" = "#E53935", # BPaL red (order in your data)
+  "BPaZ" = "#8E24AA"  # BPaZ purple
+)
+
+# Generate plot with hollow circles + highlights
+correlation_plots <- lapply(var_pairs, function(pair) {
+  x_var <- pair[1]
+  y_var <- pair[2]
+  prefix <- gsub("\\.AUC\\.", "", x_var)
+  label_text <- label_map[[prefix]]
+
+  df <- MTB.Metabolic.ASCTauc.df %>%
+    mutate(
+      is_highlight = RegimenAbbreviation %in% names(highlight_palette),
+      Regimen      = factor(ifelse(is_highlight, RegimenAbbreviation, NA_character_),
+                            levels = names(highlight_palette))
+    )
+
+  ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    # Background first: hollow grey circles
+    geom_point(
+      data = ~ subset(.x, !is_highlight),
+      shape = 21, fill = NA, colour = "grey70",
+      stroke = 0.7, size = 2, show.legend = FALSE
+    ) +
+    # Global linear fit
+    geom_smooth(method = "lm", se = FALSE, size = 0.5, colour = "grey40") +
+    # Highlights on top: hollow colored circles
+    geom_point(
+      data = ~ subset(.x, is_highlight),
+      aes(colour = Regimen),
+      shape = 21, fill = NA, stroke = 1.1, size = 2.8
+    ) +
+    # Correlation label
+    annotate(
+      "text",
+      x = min(df[[x_var]], na.rm = TRUE),
+      y = max(df[[y_var]], na.rm = TRUE),
+      label = correlation_label(df[[x_var]], df[[y_var]]),
+      parse = TRUE, hjust = 0, size = 3
+    ) +
+    # Legend only for highlights
+    scale_colour_manual(
+      values = highlight_palette,
+      na.translate = FALSE, drop = TRUE,
+      name = "Regimen"
+    ) +
+    labs(
+      title = label_text,
+      x = "AUC (linear scale)",
+      y = expression("%"*Delta*" RFU (d0–d14)")
+    ) +
+    theme_prism(base_line_size = 8/14, base_fontface = "plain") +
+    theme_pubr() +
+    theme(
+      aspect.ratio       = 1,
+      legend.position    = "bottom",
+      plot.title         = element_text(size = 9, face = "bold", hjust = 0.5),
+      axis.title         = element_text(size = 8),
+      axis.text          = element_text(size = 7),
+      axis.ticks         = element_line(size = 0.2),
+      axis.line          = element_line(size = 0.3),
+      plot.margin        = margin(5, 5, 5, 5)
+    )
+})
+
+combined_plot <- correlation_plots[[1]]
+
+# Combine and save — same path & filename
+combined_plot <- ggarrange(plotlist = correlation_plots, ncol = 1, nrow = 1)
+
+output_file <- file.path(info.res, "Scatterplot_Correlation_linearAUC_vs_pctChangeRFU_ASCT_cleaned-THESIS_mc2ONLY.pdf")
+ggsave(filename = output_file,
+       plot = combined_plot,
+       width = 9, height = 6, dpi = 300, units = "in", device = "pdf")
+
+# Cleanup
+rm(correlation_plots, combined_plot)
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(broom)
+library(ggprism)
+
+# Correlation label function using raw (linear) AUC
+correlation_label <- function(x, y) {
+  df <- data.frame(x = x, y = y)
+  model <- lm(y ~ x, data = df)
+  model_summary <- glance(model)
+  r_squared <- round(model_summary$r.squared, 4)
+  p_value <- signif(model_summary$p.value, 3)
+  r_value <- round(cor(df$x, df$y, use = "complete.obs"), 2)
+  paste0("italic(R) == ", r_value,
+         " ~ ',' ~ italic(R^2) == ", r_squared,
+         " ~ ',' ~ italic(p) == ", p_value)
+}
+
+# Only mc27000 log growth
+label_map <- list("mc27000_logGrowth" = "mc27000 log growth")
+var_pairs <- list(c("mc27000_logGrowth.AUC.", "mc27000_logGrowth_pctChange_d0_d14_RFU"))
+
+# Regimens to highlight by RegimenAbbreviation (exact matches)
+highlight_palette <- c(
+  "HR"   = "#191970", # HR navy
+  "EHRZ" = "#00BFFF", # HREZ blue
+  "BLPa" = "#E53935", # BPaL red (order in your data)
+  "BPaZ" = "#8E24AA"  # BPaZ purple
+)
+
+# Generate plot with hollow circles + highlights
+correlation_plots <- lapply(var_pairs, function(pair) {
+  x_var <- pair[1]
+  y_var <- pair[2]
+  prefix <- gsub("\\.AUC\\.", "", x_var)
+  label_text <- label_map[[prefix]]
+
+  df <- MTB.Metabolic.ASCTauc.df %>%
+    mutate(
+      is_highlight = RegimenAbbreviation %in% names(highlight_palette),
+      Regimen      = factor(ifelse(is_highlight, RegimenAbbreviation, NA_character_),
+                            levels = names(highlight_palette))
+    )
+
+  ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    # Background first: hollow grey circles
+    geom_point(
+      data = ~ subset(.x, !is_highlight),
+      shape = 21, fill = NA, colour = "grey70",
+      stroke = 0.7, size = 2, show.legend = FALSE
+    ) +
+    # Global linear fit
+    geom_smooth(method = "lm", se = FALSE, size = 0.5, colour = "grey40") +
+    # Highlights on top: hollow colored circles
+    geom_point(
+      data = ~ subset(.x, is_highlight),
+      aes(colour = Regimen),
+      shape = 21, fill = NA, stroke = 1.1, size = 2.8
+    ) +
+    # Correlation label
+    annotate(
+      "text",
+      x = min(df[[x_var]], na.rm = TRUE),
+      y = max(df[[y_var]], na.rm = TRUE),
+      label = correlation_label(df[[x_var]], df[[y_var]]),
+      parse = TRUE, hjust = 0, size = 3
+    ) +
+    # Legend only for highlights
+    scale_colour_manual(
+      values = highlight_palette,
+      na.translate = FALSE, drop = TRUE,
+      name = "Regimen"
+    ) +
+    labs(
+      title = label_text,
+      x = "AUC (linear scale)",
+      y = expression("%"*Delta*" RFU (d0–d14)")
+    ) +
+    theme_prism(base_line_size = 8/14, base_fontface = "plain") +
+    theme_pubr() +
+    theme(
+      aspect.ratio       = 1,
+      legend.position    = "bottom",
+      plot.title         = element_text(size = 9, face = "bold", hjust = 0.5),
+      axis.title         = element_text(size = 8),
+      axis.text          = element_text(size = 7),
+      axis.ticks         = element_line(size = 0.2),
+      axis.line          = element_line(size = 0.3),
+      plot.margin        = margin(5, 5, 5, 5)
+    )
+})
+
+combined_plot <- correlation_plots[[1]]
+
+# Combine and save — same path & filename
+combined_plot <- ggarrange(plotlist = correlation_plots, ncol = 1, nrow = 1)
+
+output_file <- file.path(info.res, "Scatterplot_Correlation_linearAUC_vs_pctChangeRFU_ASCT_cleaned-THESIS_mc2ONLY.pdf")
+ggsave(filename = output_file,
+       plot = combined_plot,
+       width = 9, height = 6, dpi = 300, units = "in", device = "pdf")
+
+# Cleanup
+rm(correlation_plots, combined_plot)
+
+```
+
+
+```{r}
+# Packages
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(broom)
+library(ggprism)
+
+# Null coalescing for safe label fallback
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# Correlation label function using raw (linear) AUC
+correlation_label <- function(x, y) {
+  df <- data.frame(x = x, y = y)
+  model <- lm(y ~ x, data = df)
+  model_summary <- glance(model)
+  r_squared <- round(model_summary$r.squared, 4)
+  p_value <- signif(model_summary$p.value, 3)
+  r_value <- round(cor(df$x, df$y, use = "complete.obs"), 2)
+  paste0("italic(R) == ", r_value,
+         " ~ ',' ~ italic(R^2) == ", r_squared,
+         " ~ ',' ~ italic(p) == ", p_value)
+}
+
+# Short readable names for plot labels (no hyphens)
+label_map <- list(
+  "mc27000_PBSstarved" = "mc27000 PBS starved",
+  "mc27000_PAstarved"  = "mc27000 PAN starved",
+  "mc27000_logGrowth"  = "mc27000 log growth",
+  "H37Ra_PBSstarved"   = "H37Ra PBS starved",
+  "H37Ra_logGrowth"    = "H37Ra log growth"
+)
+
+# Variable pairs to plot
+var_pairs <- list(
+  c("mc27000_PBSstarved.AUC.", "mc27000_PBSstarved_pctChange_d0_d14_RFU"),
+  c("mc27000_PAstarved.AUC.",  "mc27000_PAstarved_pctChange_d0_d14_RFU"),
+  c("mc27000_logGrowth.AUC.",  "mc27000_logGrowth_pctChange_d0_d14_RFU"),
+  c("H37Ra_PBSstarved.AUC.",   "H37Ra_PBSstarved_pctChange_d0_d14_RFU"),
+  c("H37Ra_logGrowth.AUC.",    "H37Ra_logGrowth_pctChange_d0_d14_RFU")
+)
+
+# Regimens to highlight by RegimenAbbreviation (exact matches)
+highlight_palette <- c(
+  "HR"   = "#191970", # HR navy
+  "EHRZ" = "#00BFFF", # HREZ blue
+  "BLPa" = "#E53935", # BPaL red
+  "BPaZ" = "#8E24AA"  # BPaZ purple
+)
+
+# Generate plots for all pairs
+correlation_plots <- lapply(var_pairs, function(pair) {
+  x_var <- pair[1]
+  y_var <- pair[2]
+  prefix <- gsub("\\.AUC\\.", "", x_var)
+  label_text <- label_map[[prefix]] %||% prefix
+
+  df <- MTB.Metabolic.ASCTauc.df %>%
+    mutate(
+      is_highlight = RegimenAbbreviation %in% names(highlight_palette),
+      Regimen = factor(
+        ifelse(is_highlight, RegimenAbbreviation, NA_character_),
+        levels = names(highlight_palette)
+      )
+    )
+
+  ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    # Background: hollow grey circles
+    geom_point(
+      data = ~ subset(.x, !is_highlight),
+      shape = 21, fill = NA, colour = "grey70",
+      stroke = 0.7, size = 2, show.legend = FALSE
+    ) +
+    # Global linear fit
+    geom_smooth(method = "lm", se = FALSE, size = 0.5, colour = "grey40") +
+    # Highlights: hollow coloured circles
+    geom_point(
+      data = ~ subset(.x, is_highlight),
+      aes(colour = Regimen),
+      shape = 21, fill = NA, stroke = 1.1, size = 2.8
+    ) +
+    # Correlation label (top-left)
+    annotate(
+      "text",
+      x = min(df[[x_var]], na.rm = TRUE),
+      y = max(df[[y_var]], na.rm = TRUE),
+      label = correlation_label(df[[x_var]], df[[y_var]]),
+      parse = TRUE, hjust = 0, vjust = 1, size = 5
+    ) +
+    scale_colour_manual(
+      values = highlight_palette,
+      na.translate = FALSE, drop = TRUE,
+      name = "Regimen"
+    ) +
+    labs(
+      title = label_text,
+      x = "AUC (linear scale)",
+      y = expression("%"*Delta*" RFU (d0–d14)")
+    ) +
+    theme_prism(base_line_size = 8/14, base_fontface = "plain") +
+    theme_pubr() +
+    theme(
+     aspect.ratio    = 1,
+      legend.position = "bottom",
+     plot.title      = element_text(size = 12, face = "bold", hjust = 0.5), # bigger title
+  axis.title      = element_text(size = 12),   # bigger axis titles
+  axis.text       = element_text(size = 11),   # bigger tick labels
+  axis.ticks      = element_blank(),           # no ticks
+  axis.line       = element_line(size = 0.8),  # thicker axis lines
+     plot.margin = margin(2, 2, 2, 2),
+    legend.margin = margin(0,0,0,0),
+    legend.box.margin = margin(0,0,0,0)
+    )
+})
+
+# Arrange all panels with a shared legend
+n <- length(correlation_plots)
+ncol <- 3
+nrow <- ceiling(n / ncol)
+
+# Arrange all panels with a shared legend
+combined_plot <- ggarrange(
+  plotlist = correlation_plots,
+  ncol = 2, nrow = 3,
+  common.legend = TRUE, legend = "bottom",
+  align = "hv"
+)
+
+
+# Save — same directory pattern, new filename
+output_file <- file.path(
+  info.res,
+  "Scatterplot_Correlation_linearAUC_vs_pctChangeRFU_ASCT_cleaned-THESIS_ALLSTRAINS.pdf"
+)
+
+ggsave(
+  filename = output_file,
+  plot = combined_plot,
+  width = 9, height = 15, dpi = 300, units = "in", device = "pdf"  # <- taller
+)
+
+# Cleanup
+rm(correlation_plots, combined_plot, n, ncol, nrow)
+
+```
+```{r}
+# Packages
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(broom)
+library(ggprism)
+
+# Null coalescing for safe label fallback
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# Correlation label function using raw (linear) AUC
+correlation_label <- function(x, y) {
+  df <- data.frame(x = x, y = y)
+  model <- lm(y ~ x, data = df)
+  model_summary <- glance(model)
+  r_squared <- round(model_summary$r.squared, 4)
+  p_value <- signif(model_summary$p.value, 3)
+  r_value <- round(cor(df$x, df$y, use = "complete.obs"), 2)
+  paste0("italic(R) == ", r_value,
+         " ~ ',' ~ italic(R^2) == ", r_squared,
+         " ~ ',' ~ italic(p) == ", p_value)
+}
+
+# Short readable names for plot labels (no hyphens)
+label_map <- list(
+  "mc27000_PBSstarved" = "mc27000 PBS starved",
+  "mc27000_PAstarved"  = "mc27000 PAN starved",
+  "mc27000_logGrowth"  = "mc27000 log growth",
+  "H37Ra_PBSstarved"   = "H37Ra PBS starved",
+  "H37Ra_logGrowth"    = "H37Ra log growth"
+)
+
+# Variable pairs to plot
+var_pairs <- list(
+  c("mc27000_PBSstarved.AUC.", "mc27000_PBSstarved_pctChange_d0_d14_RFU"),
+  c("mc27000_PAstarved.AUC.",  "mc27000_PAstarved_pctChange_d0_d14_RFU"),
+  c("mc27000_logGrowth.AUC.",  "mc27000_logGrowth_pctChange_d0_d14_RFU"),
+  c("H37Ra_PBSstarved.AUC.",   "H37Ra_PBSstarved_pctChange_d0_d14_RFU"),
+  c("H37Ra_logGrowth.AUC.",    "H37Ra_logGrowth_pctChange_d0_d14_RFU")
+)
+
+# Regimens to highlight by RegimenAbbreviation (exact matches)
+highlight_palette <- c(
+  "HR"   = "#191970", # HR navy
+  "EHRZ" = "#00BFFF", # HREZ blue
+  "BLPa" = "#E53935", # BPaL red
+  "BPaZ" = "#8E24AA"  # BPaZ purple
+)
+
+# Generate plots for all pairs
+correlation_plots <- lapply(var_pairs, function(pair) {
+  x_var <- pair[1]
+  y_var <- pair[2]
+  prefix <- gsub("\\.AUC\\.", "", x_var)
+  label_text <- label_map[[prefix]] %||% prefix
+
+  df <- MTB.Metabolic.ASCTauc.df %>%
+    mutate(
+      is_highlight = RegimenAbbreviation %in% names(highlight_palette),
+      Regimen = factor(
+        ifelse(is_highlight, RegimenAbbreviation, NA_character_),
+        levels = names(highlight_palette)
+      )
+    )
+
+  ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    # Background: hollow grey circles
+    geom_point(
+      data = ~ subset(.x, !is_highlight),
+      shape = 21, fill = NA, colour = "grey70",
+      stroke = 0.7, size = 2, show.legend = FALSE
+    ) +
+    # Global linear fit
+    geom_smooth(method = "lm", se = FALSE, size = 0.5, colour = "grey40") +
+    # Highlights: hollow coloured circles
+    geom_point(
+      data = ~ subset(.x, is_highlight),
+      aes(colour = Regimen),
+      shape = 21, fill = NA, stroke = 1.1, size = 2.8
+    ) +
+    # Correlation label (top-left)
+    annotate(
+      "text",
+      x = min(df[[x_var]], na.rm = TRUE),
+      y = max(df[[y_var]], na.rm = TRUE),
+      label = correlation_label(df[[x_var]], df[[y_var]]),
+      parse = TRUE, hjust = 0, vjust = 1, size = 5
+    ) +
+    scale_colour_manual(
+      values = highlight_palette,
+      na.translate = FALSE, drop = TRUE,
+      name = "Regimen"
+    ) +
+    labs(
+      title = label_text,
+      x = "AUC (linear scale)",
+      y = expression("%"*Delta*" RFU (d0–d14)")
+    ) +
+    theme_prism(base_line_size = 8/14, base_fontface = "plain") +
+    theme_pubr() +
+    theme(
+     aspect.ratio    = 1,
+      legend.position = "bottom",
+     plot.title      = element_text(size = 12, face = "bold", hjust = 0.5), # bigger title
+  axis.title      = element_text(size = 12),   # bigger axis titles
+  axis.text       = element_text(size = 11),   # bigger tick labels
+  axis.ticks      = element_blank(),           # no ticks
+  axis.line       = element_line(size = 0.8),  # thicker axis lines
+     plot.margin = margin(2, 2, 2, 2),
+    legend.margin = margin(0,0,0,0),
+    legend.box.margin = margin(0,0,0,0)
+    )
+})
+
+# Arrange all panels with a shared legend
+n <- length(correlation_plots)
+ncol <- 3
+nrow <- ceiling(n / ncol)
+
+# Arrange all panels with a shared legend
+combined_plot <- ggarrange(
+  plotlist = correlation_plots,
+  ncol = 2, nrow = 3,
+  common.legend = TRUE, legend = "bottom",
+  align = "hv"
+)
+
+
+# Save — same directory pattern, new filename
+output_file <- file.path(
+  info.res,
+  "Scatterplot_Correlation_linearAUC_vs_pctChangeRFU_ASCT_cleaned-THESIS_ALLSTRAINS.pdf"
+)
+
+ggsave(
+  filename = output_file,
+  plot = combined_plot,
+  width = 9, height = 15, dpi = 300, units = "in", device = "pdf"  # <- taller
+)
+
+# Cleanup
+rm(correlation_plots, combined_plot, n, ncol, nrow)
+
+```
+
+
+```{r}
+# Packages
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(broom)
+library(ggprism)
+
+# Null coalescing for safe label fallback
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# Correlation label function using raw (linear) AUC
+correlation_label <- function(x, y) {
+  df <- data.frame(x = x, y = y)
+  model <- lm(y ~ x, data = df)
+  model_summary <- glance(model)
+  r_squared <- round(model_summary$r.squared, 4)
+  p_value <- signif(model_summary$p.value, 3)
+  r_value <- round(cor(df$x, df$y, use = "complete.obs"), 2)
+  paste0("italic(R) == ", r_value,
+         " ~ ',' ~ italic(R^2) == ", r_squared,
+         " ~ ',' ~ italic(p) == ", p_value)
+}
+
+# Short readable names for plot labels (no hyphens)
+label_map <- list(
+  "mc27000_PBSstarved" = "mc27000 PBS starved",
+  "mc27000_PAstarved"  = "mc27000 PAN starved",
+  "mc27000_logGrowth"  = "mc27000 log growth"
+)
+
+# Variable pairs to plot (H37Ra removed)
+var_pairs <- list(
+  c("mc27000_PBSstarved.AUC.", "mc27000_PBSstarved_pctChange_d0_d14_RFU"),
+  c("mc27000_PAstarved.AUC.",  "mc27000_PAstarved_pctChange_d0_d14_RFU"),
+  c("mc27000_logGrowth.AUC.",  "mc27000_logGrowth_pctChange_d0_d14_RFU")
+)
+
+# Generate plots for all pairs (all points identical hollow rings)
+correlation_plots <- lapply(var_pairs, function(pair) {
+  x_var <- pair[1]
+  y_var <- pair[2]
+  prefix <- gsub("\\.AUC\\.", "", x_var)
+  label_text <- label_map[[prefix]] %||% prefix
+
+  df <- MTB.Metabolic.ASCTauc.df
+
+  ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    # All points: identical hollow rings
+    geom_point(
+      shape = 21, fill = NA, colour = "grey30",
+      stroke = 0.9, size = 2.6, show.legend = FALSE
+    ) +
+    # Global linear fit
+    geom_smooth(method = "lm", se = FALSE, size = 0.6, colour = "grey40") +
+    # Correlation label (top-left)
+    annotate(
+      "text",
+      x = min(df[[x_var]], na.rm = TRUE),
+      y = max(df[[y_var]], na.rm = TRUE),
+      label = correlation_label(df[[x_var]], df[[y_var]]),
+      parse = TRUE, hjust = 0, vjust = 1, size = 4
+    ) +
+    labs(
+      title = label_text,
+      x = "AUC (linear scale)",
+      y = expression("%"*Delta*" RFU (d0–d14)")
+    ) +
+    theme_prism(base_line_size = 8/14, base_fontface = "plain") +
+    theme_pubr() +
+    theme(
+      aspect.ratio    = 1,
+      legend.position = "none",
+      plot.title      = element_text(size = 12, face = "bold", hjust = 0.5),
+      axis.title      = element_text(size = 12),
+      axis.text       = element_text(size = 11),
+      axis.ticks      = element_blank(),
+      axis.line       = element_line(size = 0.8),
+      plot.margin     = margin(2, 2, 2, 2),
+      legend.margin   = margin(0,0,0,0),
+      legend.box.margin = margin(0,0,0,0)
+    )
+})
+
+# Arrange 3 panels in a single row
+combined_plot <- ggarrange(
+  plotlist = correlation_plots,
+  ncol = 1, nrow = 3,
+  align = "hv"
+)
+
+# Save — same directory pattern, new filename
+output_file <- file.path(
+  info.res,
+  "Scatterplot_Correlation_linearAUC_vs_pctChangeRFU_ASCT_cleaned-THESIS_mc27000-only.pdf"
+)
+
+# Save as A4
+ggsave(
+  filename = output_file,
+  plot = combined_plot,
+  width = 8.27, height = 11.7, dpi = 300, units = "in", device = "pdf"
+)
+# Cleanup
+rm(correlation_plots, combined_plot)
+```
+
+```{r}
+
+```
+

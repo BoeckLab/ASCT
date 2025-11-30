@@ -1,0 +1,955 @@
+---
+title: "CFUmtb analysis"
+author: "Alex"
+date: "2025-01-28"
+output: html_document
+---
+# ================================================================
+# Aim
+# ================================================================
+# Integrate CFU-based killing measurements with ASCT-mtb single-cell
+# readouts and established MTB efficacy models across drug regimens.
+#
+# This script:
+# - Loads CFU time-kill data from four mc27000 experiments (log-growth and
+#   PBS-starved) and harmonises regimen names / isolates across datasets.
+# - Computes per-regimen live-cell fractions and log10 fold-changes
+#   (day 0 → day 3 / day 7) and aligns these with ASCT-mtb AUC readouts
+#   (Table S1).
+# - Builds a correlation table between CFU-derived live-cell fractions
+#   (day 3 / day 7, log10) and ASCT-mtb AUC for mc27000 in log-growth and
+#   PBS-starved conditions, and visualises these relationships with
+#   regression-based scatter plots.
+# - Tests whether CFU log10 fold-changes (day 0 → day 3 / day 7) differ
+#   between regimens that perform at least as well as Standard of Care vs.
+#   “Better than SOC” across multiple MTB models (RMM, BMM, C3HeB/FeJ BMM,
+#   and clinical ranking), using exact Mann–Whitney U tests.
+# - Summarises CFU time-kill profiles as log10 fold changes vs. baseline
+#   for both mc27000 states, overlays regimen-specific curves and LOD,
+#   and highlights key regimens (HR, EHRZ, BLPa, BPaZ).
+# - Exports a consolidated result table containing CFU log10 CFU values,
+#   live-cell fractions, log10 fold-changes, ASCT-mtb AUCs, and MTB model
+#   rankings for each regimen to support downstream analysis and plotting.
+
+#1. Defining variables
+```{r}
+info.wd <- getwd()
+info.res <- paste(info.wd,
+                  "/Experiment-Results",
+                  sep="")
+
+
+info.mtb.auc <- c("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCT/ASCT_Figures/ASCT_Main_Data/TableS1_MTB_AUC.csv")
+
+
+```
+
+## 1.1  Load libraries
+```{r}
+# Data wrangling
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# Loading xlsx tables
+library(readxl)
+
+# Visualization
+library(ggplot2)
+library(ggprism) 
+library(wesanderson) # Color palette
+library(ggpubr)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels)
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggrepel)
+library(ggExtra)
+
+# Statistical analysis
+library(rstatix)
+library(coin)
+library(broom)
+
+# Grid manipulation for ggplot
+library(grid)
+
+```
+
+
+#2. Load CFU result files
+```{r}
+info.list.of.CFU.dir <- c("CFUmtb.06_mc2700pbs",
+                          "CFUmtb.05_mc2700pbs",
+                          "CFUmtb.01_mc2700log",
+                          "CFUmtb.04_mc2700log")
+
+info.list.of.CFU.dir <- paste(dirname(getwd()),
+                              "/",
+                              info.list.of.CFU.dir,
+                              "/",
+                              "Experiment-Results",
+                              
+                              sep ="")
+
+
+# Initialize an empty list to store data
+all_data <- list()
+
+
+# Loop through each directory and load CSV files
+for (dir in info.list.of.CFU.dir) {
+  csv_files <- list.files(dir, pattern = "\\.csv$", full.names = TRUE)
+  
+  for (file in csv_files) {
+    temp_data <- read.csv(file, stringsAsFactors = FALSE)  # Use read.csv()
+    temp_data$source_file <- file  # Add a column with file name
+    all_data <- append(all_data, list(temp_data))
+  }
+}
+
+# Combine all data into a single dataframe
+CFU.df <- bind_rows(all_data)
+
+# Combine all data into a single dataframe
+CFU.df <- bind_rows(all_data)
+
+CFU.df <- CFU.df %>%
+select(-source_file)
+
+rm(temp_data,
+   all_data)
+
+
+CFU.df <- CFU.df %>%
+  mutate(DrugCombination = if_else(DrugCombination == "H-E", "E-H", DrugCombination))
+
+
+CFU.df <- CFU.df %>%
+  mutate(Isolate = if_else(ExpID %in% c("CFUmtb.06.20250108", "CFUmtb.05.20250106"), 
+                           "mc27000_PBSstarved", 
+                           if_else(ExpID %in% c("CFUmtb.01.20241220", "CFUmtb.04.20250104"), 
+                                   "mc27000_logGrowth", 
+                                   NA_character_)))  # Assign NA if none of the conditions match
+
+
+ CFU.df <-  CFU.df %>%
+filter(!(ExpID == "CFUmtb.01.20241220" & DrugCombination == "E-H-R-Z"))%>%
+  filter(!(ExpID == "CFUmtb.01.20241220" & DrugCombination == "E-M-R-Z"))%>%
+  filter(!(ExpID == "CFUmtb.04.20250104" & DrugCombination == "H-M-R"))%>%
+  filter(!(ExpID == "CFUmtb.04.20250104" & DrugCombination == "H-P-Z"))
+
+ CFU.TKC.df <-  CFU.df%>%
+   filter(DrugCombination != "Ka")
+
+```
+
+# 3. CFU correlation dataframe
+```{r}
+# Convert log10CFU values back to CFU and compute fractions
+CFU.correlation.df <- CFU.df %>%
+  drop_na()%>%
+  filter(DrugCombination != "Ka")%>%
+  filter(!(ExpID == "CFUmtb.01.20241220" & DrugCombination == "E-H-R-Z"))%>%
+  filter(!(ExpID == "CFUmtb.01.20241220" & DrugCombination == "E-M-R-Z"))%>%
+  filter(!(ExpID == "CFUmtb.04.20250104" & DrugCombination == "H-M-R"))%>%
+  filter(!(ExpID == "CFUmtb.04.20250104" & DrugCombination == "H-P-Z"))%>%
+
+  mutate(CFU = 10^mean_log10CFU) %>%  # Convert log10CFU to CFU
+  group_by(
+           Isolate,
+           DrugCombination) %>%       # Group by Drug Combination
+  mutate(CFU_day0 = CFU[Day == 0]) %>% # Get CFU at day 0 for each DrugCombination
+  mutate(fraction_alive = CFU / CFU_day0) %>%  # Compute fraction alive
+  ungroup()  # Ungroup to avoid grouping issues
+
+CFU.correlation.df <- CFU.correlation.df %>%
+  ungroup()%>%
+  select(Isolate,
+         DrugCombination,
+         Day,
+         fraction_alive)
+
+
+
+CFU.correlation.df <- CFU.correlation.df %>%
+  mutate(Isolate_TreatmentDuration = paste(Isolate,
+                                   "_LiveCellFraction.d",
+                                   Day,
+                                   sep=""))%>%
+  select(Isolate_TreatmentDuration,
+         DrugCombination,
+         fraction_alive)%>%
+  pivot_wider(
+    names_from = Isolate_TreatmentDuration, 
+    values_from = fraction_alive,
+    names_prefix = "")
+  
+CFU.correlation.df <- CFU.correlation.df %>%
+  mutate(RegimenAbbreviation = gsub("-","",DrugCombination))%>%
+  select(RegimenAbbreviation,
+         contains("d3"), 
+         contains("d7"))  # Selects columns containing 'd3' first, then 'd7')
+```
+
+
+## 3.1  Load MTB data
+```{r}
+MTB.df <- read.csv(info.mtb.auc)
+
+MTB.df <- MTB.df %>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         RMM.2021,
+         BMM.2021,
+         BMM.BHeB.in.C3HeB.FeJ.2021,
+         Clinical.2022)
+
+
+```
+
+
+## 3.2 MTB correlation df
+
+### log10 transformation
+```{r}
+MTB.correlation.df <- read.csv(info.mtb.auc)
+
+MTB.correlation.df <-MTB.correlation.df %>%
+select(RegimenAbbreviation,
+       RegimenName,
+       mc27000_PBSstarved.AUC.,
+       mc27000_logGrowth.AUC.)
+
+
+
+MTB.correlation.df <- left_join(MTB.correlation.df,
+                                CFU.correlation.df)
+
+# Perform log10 transformation for columns containing "d3" or "d7"
+MTB.correlation.df <- MTB.correlation.df %>%
+  ungroup()%>%
+  mutate(across(contains("d3"), ~ log10(.), .names = "{.col}_lg10"),
+         across(contains("d7"), ~ log10(.), .names = "{.col}_lg10"),
+         mc27000_PBSstarved.AUC.lg10 = log10(mc27000_PBSstarved.AUC.),
+         mc27000_logGrowth.AUC.lg10 = log10(mc27000_logGrowth.AUC.))
+
+
+```
+### Export correlations
+```{r}
+
+MTB.correlation.df <- MTB.correlation.df %>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         mc27000_PBSstarved.AUC.,
+         mc27000_PBSstarved.AUC.lg10,
+         mc27000_logGrowth.AUC.,
+         mc27000_logGrowth.AUC.lg10,
+         everything())
+# Get the current date in YYYYMMDD format
+current_date <- format(Sys.Date(), "%Y%m%d")
+
+# Construct the filename with the date before ".csv"
+output_filename <- paste0(info.res, "/","MTBcfu_ASCTmtbauc_correlationtable_",
+                          current_date,
+                          ".csv",
+                          sep="")
+
+# Write the CSV file
+write.csv(MTB.correlation.df ,
+          output_filename, 
+          row.names = FALSE)
+```
+
+### correlation plot
+```{r}
+
+# Function to compute R and R² using lm() for correlation labeling
+correlation_label <- function(x, y) {
+  df <- data.frame(x = x, y = y)
+  model <- lm(y ~ x, data = df)
+  model_summary <- glance(model)
+  r_squared <- round(model_summary$r.squared, 4)
+  p_value <- signif(model_summary$p.value, 3)
+  r_value <- round(cor(x, y, use = "complete.obs"), 2)
+
+  label <- paste0("italic(R) == ", r_value, 
+                  " ~ ',' ~ italic(R^2) == ", r_squared, 
+                  " ~ ',' ~ italic(p) == ", p_value)
+  return(label)
+}
+
+# Define variables for correlation
+pbsstarved_vars <- c("mc27000_PBSstarved_LiveCellFraction.d3_lg10",
+                     "mc27000_PBSstarved_LiveCellFraction.d7_lg10")
+
+loggrowth_vars <- c("mc27000_logGrowth_LiveCellFraction.d3_lg10",
+                    "mc27000_logGrowth_LiveCellFraction.d7_lg10")
+
+# Create Plot 1: PBSstarved Correlations
+pbsstarved_plots <- lapply(pbsstarved_vars, function(var) {
+  ggplot(MTB.correlation.df, aes_string(x = var, y = "mc27000_PBSstarved.AUC.")) +
+    theme_prism(base_line_size = 8/14, base_fontface = "plain") +
+    geom_point(stroke = 0, size = 1, alpha = 0.75) +
+    geom_smooth(method = "lm", se = FALSE, color = ifelse(grepl("d3", var), "blue", "red"), size = 0.5) +
+    annotate("text", x = min(MTB.correlation.df[[var]], na.rm = TRUE), 
+             y = max(MTB.correlation.df$mc27000_PBSstarved.AUC., na.rm = TRUE), 
+             label = correlation_label(MTB.correlation.df[[var]], MTB.correlation.df$mc27000_PBSstarved.AUC.), 
+             parse = TRUE, hjust = 0, size = 4) +
+    labs(x = "CFU log10 Live Cell Fraction", 
+         y = "mc27000_PBSstarved.AUC",
+         title = ifelse(grepl("d3", var), "Day 3 Correlation", "Day 7 Correlation")) +
+    theme(panel.border = element_blank(),
+          plot.margin = margin(10, 10, 10, 10),
+          legend.position = "none",
+          aspect.ratio = 1,
+          axis.text = element_text(size = 8),
+          axis.title = element_text(size = 9)) +
+    coord_fixed(ratio = 1)
+})
+
+# Create Plot 2: LogGrowth Correlations
+loggrowth_plots <- lapply(loggrowth_vars, function(var) {
+  ggplot(MTB.correlation.df, aes_string(x = var, y = "mc27000_logGrowth.AUC.")) +
+    theme_prism(base_line_size = 8/14, base_fontface = "plain") +
+    geom_point(stroke = 0, size = 1, alpha = 0.75) +
+    geom_smooth(method = "lm", se = FALSE, color = ifelse(grepl("d3", var), "blue", "red"), size = 0.5) +
+    annotate("text", x = min(MTB.correlation.df[[var]], na.rm = TRUE), 
+             y = max(MTB.correlation.df$mc27000_logGrowth.AUC., na.rm = TRUE), 
+             label = correlation_label(MTB.correlation.df[[var]], MTB.correlation.df$mc27000_logGrowth.AUC.), 
+             parse = TRUE, hjust = 0, size = 4) +
+    labs(x = "CFU log10 Live Cell Fraction", 
+         y = "mc27000_logGrowth.AUC",
+         title = ifelse(grepl("d3", var), "Day 3 Correlation", "Day 7 Correlation")) +
+    theme(panel.border = element_blank(),
+          plot.margin = margin(10, 10, 10, 10),
+          legend.position = "none",
+          aspect.ratio = 1,
+          axis.text = element_text(size = 8),
+          axis.title = element_text(size = 9)) +
+    coord_fixed(ratio = 1)
+})
+
+# Combine all 4 plots
+final_plot_list <- c(pbsstarved_plots, loggrowth_plots)
+
+# Arrange all plots in a 2x2 grid (A4 size)
+combined_plot <- ggarrange(plotlist = final_plot_list, ncol = 2, nrow = 2)
+
+# Save as A4 PDF (210mm x 297mm)
+ggsave(filename = paste(info.res,"/Scatterplot.Correlation_CFU.ASCTauc.pdf",sep=""),
+       plot = combined_plot, 
+       width = 8.27,   # A4 width in inches (210mm)
+       height = 11.69, # A4 height in inches (297mm)
+       dpi = 300, units = "in", device = "pdf")
+
+# Cleanup variables
+rm(pbsstarved_plots, loggrowth_plots, final_plot_list, combined_plot)
+
+```
+```{r}
+
+```
+
+#4. Association across different MTB model
+## 4.1 Calculating log fold change
+```{r}
+# Calculate log fold change directly
+CFU.df <- CFU.df %>%
+  group_by(ExpID,
+           Isolate,
+           DrugCombination) %>%  # Group by drug combination
+  mutate(
+   logFC_d0_to_d3 = mean_log10CFU[Day == 3] - mean_log10CFU[Day == 0],
+    logFC_d0_to_d7 = mean_log10CFU[Day == 7] - mean_log10CFU[Day == 0]
+  ) %>%
+  ungroup()
+
+
+CFU.df <- CFU.df %>%
+mutate(RegimenAbbreviation = gsub("-","",DrugCombination))%>%
+  select(Isolate,
+         RegimenAbbreviation,
+         logFC_d0_to_d3,
+         logFC_d0_to_d7)
+
+
+
+# Merging data
+MTB.CFU.df <- left_join(MTB.df,
+                        CFU.df)
+
+MTB.CFU.df <-MTB.CFU.df %>%
+  distinct()
+
+
+rm(CFU.df,
+   MTB.df)
+
+```
+
+
+## Statistics: mann whitney u-test
+```{r}
+
+
+
+# Define the models (formerly outcomes)
+list.of.models <- c("RMM.2021", "BMM.2021", "BMM.BHeB.in.C3HeB.FeJ.2021", "Clinical.2022")
+
+# Define the feature variables
+list.of.variables <- c("logFC_d0_to_d3", "logFC_d0_to_d7")
+
+# Initialize an empty dataframe to store the results
+MTB.stats <- data.frame()
+list.of.iso <- unique(MTB.CFU.df$Isolate)
+iso <- list.of.iso[2]
+model <- list.of.models[2]
+var <-list.of.variables[1]
+
+# Loop through each Isolate
+for (iso in list.of.iso ) {
+  
+  # Subset data for the specific isolate
+  MTB.iso <- MTB.CFU.df %>% filter(Isolate == iso)
+
+  # Loop through each model (formerly outcome)
+  for (model in list.of.models) {
+    
+    # Apply model-specific transformations inside the loop
+ 
+    # Loop through each variable
+    for (var in list.of.variables) {
+      
+      # Subset and preprocess the data for the current isolate, model, and variable
+      MTB.sub <- MTB.iso %>%
+      select(RegimenAbbreviation,
+             Isolate,
+          !!sym(model),
+          !!sym(var))%>%
+        drop_na()%>%
+        filter(!!sym(model) != "ND")%>%
+      mutate(!!model := case_when(
+        model == "RMM.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+        model == "BMM.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+        model == "BMM.BHeB.in.C3HeB.FeJ.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+        model == "Clinical.2022" & (!!sym(model) %in% c("C1-")) ~ "Standard of Care",
+        model == "Clinical.2022" & (!!sym(model) %in% c("ND", "C2-")) ~ NA_character_,  # Remove these rows later
+        TRUE ~ "Better than SOC"
+      )) %>%
+        select(                        RegimenAbbreviation,
+
+               all_of(c(model,
+                        var))) %>%
+        drop_na() %>%
+        mutate(
+          across(all_of(model), 
+                 as.factor),  # Convert model column to factor
+          across(all_of(var), as.numeric)    # Ensure variable column is numeric
+        )
+
+      # Ensure at least two groups exist before running the test
+      if (length(unique(MTB.sub[[model]])) > 1) {
+        
+        # Apply the Wilcoxon test using coin::wilcox_test
+        test_result <- coin::wilcox_test(as.formula(paste(var, "~", model)), 
+                                         data = MTB.sub, 
+                                         distribution = "exact")
+        
+        # Extract p-value
+        p_value <- as.numeric(pvalue(test_result))
+        
+        # Dynamically assign the sample size based on the model
+        reference_size <- case_when(
+          model == "RMM.2021" ~ "46",
+          model == "BMM.2021" ~ "58",
+          model == "BMM.BHeB.in.C3HeB.FeJ.2021" ~ "16",
+          model == "Clinical.2022" ~ "15",
+          TRUE ~ "NA"  # Default case
+        )
+        
+        sample.size <- paste(nrow(MTB.sub), "/", reference_size, sep = "")
+
+      
+        # Store results
+        MTB.stats.sub <- data.frame(
+          Isolate = iso,
+          Metric = var,
+          Model = model,
+          Stat_test = "mwu.test",
+          p.value = p_value,
+          sample.N =     sample.size 
+        )
+        
+        # Append results to the main stats dataframe
+        MTB.stats <- rbind(MTB.stats, MTB.stats.sub)
+      }
+    }
+  }
+}
+
+
+rm(test_result,
+   MTB.sub,
+   MTB.stats.sub,
+   MTB.iso)
+```
+
+
+
+```{r}
+# Define the isolates, models, and calculations (feature variables)
+list.of.isolates <- unique(MTB.CFU.df$Isolate)
+iso <- list.of.isolates[1]
+
+list.of.models <- c("RMM.2021", "BMM.2021", "BMM.BHeB.in.C3HeB.FeJ.2021", "Clinical.2022")
+model <- list.of.models[1]
+
+list.of.variables <- c("logFC_d0_to_d3", "logFC_d0_to_d7")
+var <- list.of.variables[1]
+
+# Initialize list for storing plots
+gg.plot.list <- list()
+
+# Loop through each Isolate
+for (iso in list.of.isolates) {
+  
+  # Subset data for the specific isolate
+  MTB.iso <- MTB.CFU.df %>% filter(Isolate == iso)
+
+  # Loop through each model
+  for (model in list.of.models) {
+    
+    # Loop through each feature variable
+    for (var in list.of.variables) {
+      
+      # Subset and preprocess data
+      MTB.sub <- MTB.iso %>%
+        select(RegimenAbbreviation, Isolate, !!sym(model), !!sym(var)) %>%
+        drop_na() %>%
+        filter(!!sym(model) != "ND") %>%
+        mutate(
+          !!model := case_when(
+            model == "RMM.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+            model == "BMM.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+            model == "BMM.BHeB.in.C3HeB.FeJ.2021" & (!!sym(model) %in% c("C0", "-C1", "-C2")) ~ "Standard of Care",
+            model == "Clinical.2022" & (!!sym(model) %in% c("C1-")) ~ "Standard of Care",
+            model == "Clinical.2022" & (!!sym(model) %in% c("ND", "C2-")) ~ NA_character_,  # Remove these rows
+            TRUE ~ "Better than SOC"
+          )) %>%
+        drop_na() %>%
+        select(RegimenAbbreviation, all_of(c(model, var))) %>%
+        mutate(
+          Outcome = factor(!!sym(model), levels = c("Standard of Care", "Better than SOC")),  # Set factor levels
+          value = !!sym(var)  # Rename for plotting
+        )
+
+      # Add p-values from MTB.stats
+      pval <- MTB.stats %>%
+        filter(Isolate == iso, Metric == var, Model == model) %>%
+        pull(p.value)
+      
+      # Add sample size
+      sample.size.N  <- MTB.stats %>%
+        filter(Isolate == iso, Metric == var, Model == model) %>%
+        pull(sample.N)
+
+      # Format p-value
+      p_label <- ifelse(length(pval) > 0, ifelse(pval < 0.0001,
+                                                 "P < 0.0001",
+                                                 paste("P =", round(pval, 3))),
+                        "P = NA")
+      
+      # Generate ggplot
+      gg.model <- ggplot(MTB.sub, aes(x = Outcome, y = value, fill = Outcome)) +
+        geom_boxplot(outlier.shape = NA, alpha = 0.5, size = 0.2) +
+        stat_boxplot(geom = "errorbar", width = 0.1, size = 0.1) +
+        geom_jitter(color = "black", size = 0.3, alpha = 1, shape = 20,
+                    position = position_jitter(seed = 1, width = 0.3, height = 0)) +
+        scale_fill_manual(values = c("Standard of Care" = "coral",
+                                     "Better than SOC" = "darkgreen")) +
+        scale_y_continuous(limits = c(-10, 10), breaks = seq(-10, 10, by = 5)) +
+        labs(
+          x = "",
+          y = paste(iso, "\n", var, sep = ""),
+          title = paste(model, "-", iso),  # Plot title
+          subtitle = paste(p_label, "   n:", sample.size.N, sep = "")
+        ) +
+        theme_prism(base_line_size = 0.2) +
+        theme(
+          plot.title = element_text(size = 8, face = "bold"),   # Reduce title size
+          plot.subtitle = element_text(size = 7),  # Reduce subtitle size
+          strip.background = element_blank(),
+          panel.border = element_blank(),
+          legend.position = "none",
+          aspect.ratio = 1,
+          axis.text = element_text(size = 7),
+          axis.title = element_text(size = 7)
+        )
+
+      # Store the plot in the list
+      plot_key <- paste(iso, var, model, sep = " strain: ")
+      gg.plot.list[[plot_key]] <- gg.model
+      
+      # Cleanup
+      rm(gg.model, pval, p_label, MTB.sub)
+    }
+  }
+}
+
+# Display example plot (modify for any isolate/model/variable)
+print(gg.plot.list[[1]])
+
+
+```
+
+
+
+```{r}
+
+# Define output filename
+output_pdf <- paste(info.res, "/CFUmtb_Association_Plots_Combined.pdf", sep = "")
+
+# Extract plots based on model groups
+plots_rmm <- gg.plot.list[grep("RMM.2021", names(gg.plot.list))]
+plots_bmm <- gg.plot.list[grep("BMM.2021", names(gg.plot.list))]
+plots_bmm_bheb <- gg.plot.list[grep("BMM.BHeB.in.C3HeB.FeJ.2021", names(gg.plot.list))]
+plots_clinical <- gg.plot.list[grep("Clinical.2022", names(gg.plot.list))]
+
+# Combine all selected plots in order (4 plots per row)
+final_plot_list <- c(plots_rmm, plots_bmm, plots_bmm_bheb, plots_clinical)
+
+# Ensure we exactly have 4 rows & 4 columns
+combined_plot <- ggarrange(plotlist = final_plot_list, ncol = 4, nrow = 4, align = "hv")
+
+# Save as PDF
+ggsave(filename = output_pdf, 
+       plot = combined_plot, 
+       width = 16, height = 12,  # Adjusted for better layout
+       dpi = 300, units = "in", 
+       device = "pdf")
+
+# Confirmation message
+cat("✅ PDF saved successfully as:", output_pdf, "\n")
+
+rm(combined_plot,
+   final_plot_list,
+   gg.plot.list,
+   MTB.iso,
+   plots_rmm,
+   plots_clinical,
+   plots_bmm_bheb,
+   plots_bmm,
+   CFU.correlation.df)
+```
+
+
+#5. Overall time kill curve plot 
+```{r}
+
+
+# Define x-axis timepoints
+x.axis.timepoints <- c(0, 72, 168)
+info.LOD <- log10((1 * 1) / 0.05) # 1 colony ; undiluted ; 20 cells/ml ; log10 CFU 1.3
+
+# Define color palette
+set.seed(123)  # For reproducibility
+color_palette <- wes_palette("Zissou1", n = length(unique(CFU.TKC.df$DrugCombination)), type = "continuous")
+
+
+CFUmtb.LgFoldChange.d0 <- MTB.CFU.df %>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         Isolate)%>%
+  distinct()%>%
+  mutate(logFC_d0_to_d0 = 0)
+
+CFUmtb.LgFoldChange <- MTB.CFU.df %>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         Isolate,
+         logFC_d0_to_d3,
+         logFC_d0_to_d7)%>%
+  left_join(CFUmtb.LgFoldChange.d0)
+
+rm(CFUmtb.LgFoldChange.d0)
+
+
+# Reshape data to long format
+CFUmtb.LgFoldChange_long <- pivot_longer(
+ CFUmtb.LgFoldChange,
+  cols = starts_with("logFC"),
+  names_to = "Day",
+  values_to = "LogFoldChange"
+)
+
+CFUmtb.LgFoldChange_long <-CFUmtb.LgFoldChange_long %>%
+  mutate(Day = as.numeric(gsub("logFC_d0_to_d", "",Day)))
+
+
+LOD.pbs.starved <- CFU.TKC.df %>%
+  filter(Day == 0)%>%
+  filter(Isolate == "mc27000_PBSstarved")%>%
+  distinct()%>%
+  select(Day,
+         mean_log10CFU)%>%
+  distinct()
+LOD.pbs.starved <- info.LOD - max(LOD.pbs.starved$mean_log10CFU)
+
+
+LOD.growth<- CFU.TKC.df %>%
+  filter(Day == 0)%>%
+  filter(Isolate == "mc27000_logGrowth")%>%
+  distinct()%>%
+  select(Day,
+         mean_log10CFU)%>%
+  distinct()
+LOD.growth <- info.LOD - max(LOD.growth$mean_log10CFU)
+
+
+# Define color palette
+set.seed(123)  # For reproducibility
+color_palette <- wes_palette("Zissou1", n = length(unique(CFU.TKC.df$DrugCombination)), type = "continuous")
+```
+
+
+```{r}
+# Prepare LOD values for each isolate
+LOD.df <- tibble(
+  Isolate = c("mc27000_logGrowth", "mc27000_PBSstarved"),
+  LOD_value = c(LOD.growth, LOD.pbs.starved)  # Assuming these values are precomputed
+)
+
+# Merge LOD values into the dataset
+CFUmtb.LgFoldChange_long <- CFUmtb.LgFoldChange_long %>%
+  left_join(LOD.df, by = "Isolate")  # Add LOD_value based on Isolate
+
+
+rm(LOD.growth,
+   LOD.pbs.starved)
+```
+
+
+```{r}
+# Create the ggplot object
+gg <- CFUmtb.LgFoldChange_long %>%
+  mutate(DrugCombination.tp = paste(RegimenAbbreviation, Day, sep="_")) %>%
+  mutate(DrugCombination.Isolate = paste(RegimenAbbreviation, Isolate, sep="_")) %>%
+  
+  ggplot(aes(
+    x = Day, 
+    y = LogFoldChange, 
+    color = RegimenAbbreviation,   
+    group = DrugCombination.Isolate # Connect points per drug
+  )) +
+  
+  geom_point(size = 0.01, alpha = 0.8, stroke = 0) +  
+  geom_line(size = 0.3, alpha = 1) +  
+
+  # Dynamically set LOD per facet
+  geom_hline(aes(yintercept = LOD_value), linetype = "solid", color = "black", size = 0.2, alpha = 0.5) +
+
+  scale_x_continuous(breaks = seq(0, 7, by = 1), limits = c(0, 7)) + 
+  scale_color_manual(values = color_palette) + 
+
+  theme_pubr() +  
+  theme(
+    strip.text    = element_text(size = 8),
+    axis.text.x   = element_text(size = 6),
+    axis.text.y   = element_text(size = 6),
+    aspect.ratio  = 1,
+    legend.position = "none"
+  ) + 
+
+  facet_wrap_paginate(~ Isolate, ncol = 2, nrow = 1, scales = "fixed", page = 1)
+
+# Determine how many pages are needed
+n <- n_pages(gg)
+cat("Number of pages needed:", n, "\n")
+
+# Save to a multi-page PDF
+plot.file <- file.path(info.res, "CFUmtb_TimeKillCurve.pdf")
+pdf(plot.file, paper = "a4", width = 10, height = 8)
+
+for (i in seq_len(n)) {
+  print(
+    gg + facet_wrap_paginate(~ Isolate, ncol = 2, nrow = 1, scales = "fixed", page = i)
+  )
+}
+
+dev.off()
+
+
+
+```
+
+## Highlighted drugs HR, HREZ, BPaL and BPaZ
+```{r}
+# Define highlighted drugs and their colors
+highlighted_drugs <- c("HR", "EHRZ", "BLPa", "BPaZ")
+highlighted_colors <- c("HR" = "blue", "EHRZ" = "dodgerblue3", "BLPa" = "red", "BPaZ" = "purple")
+
+# Update the dataset to classify drugs as either highlighted or other
+CFUmtb.LgFoldChange_long <- CFUmtb.LgFoldChange_long %>%
+  mutate(
+    Highlighted = ifelse(RegimenAbbreviation %in% highlighted_drugs, RegimenAbbreviation, "Other"),
+    DrugCombination.tp = paste(RegimenAbbreviation, Day, sep="_"),
+    DrugCombination.Isolate = paste(RegimenAbbreviation, Isolate, sep="_")  # Ensure this exists
+  )
+
+# Create the ggplot object
+gg <- ggplot(data = CFUmtb.LgFoldChange_long, aes(
+    x = Day, 
+    y = LogFoldChange, 
+    color = Highlighted,    
+    group = DrugCombination.Isolate
+  )) +
+  
+  # Plot all lines in gray except highlighted ones (exclude from legend)
+  geom_line(data = subset(CFUmtb.LgFoldChange_long, Highlighted == "Other"),
+            aes(group = DrugCombination.Isolate),
+            color = "gray70", size = 0.3, alpha = 0.8, show.legend = FALSE) +  # Exclude gray from legend
+
+  # Plot highlighted drugs with colors and keep in legend
+  geom_line(data = subset(CFUmtb.LgFoldChange_long, Highlighted != "Other"),
+            aes(group = DrugCombination.Isolate),
+            size = 0.6, alpha = 1, show.legend = TRUE) +  
+
+  # Dynamically set LOD per facet
+  geom_hline(aes(yintercept = LOD_value), linetype = "solid", color = "black", size = 0.2, alpha = 0.5) +
+
+  scale_x_continuous(breaks = seq(0, 7, by = 1), limits = c(0, 7)) + 
+  
+  # Apply manual color scale, excluding "Other" from the legend
+  scale_color_manual(
+    values = highlighted_colors,  # Only define colors for highlighted drugs
+    breaks = highlighted_drugs,  # Only show highlighted drugs in legend
+    guide = guide_legend(override.aes = list(size = 1))  # Adjust legend appearance
+  ) + 
+
+  theme_pubr() +  
+  theme(
+    strip.text    = element_text(size = 8),
+    axis.text.x   = element_text(size = 6),
+    axis.text.y   = element_text(size = 6),
+    aspect.ratio  = 1,
+    legend.position = "right"  # Adjust legend position if needed
+  ) + 
+
+  facet_wrap_paginate(~ Isolate, ncol = 2, nrow = 1, scales = "fixed", page = 1)
+
+# Determine how many pages are needed
+n <- n_pages(gg)
+cat("Number of pages needed:", n, "\n")
+
+# Save to a multi-page PDF
+plot.file <- file.path(info.res, "CFUmtb_TimeKillCurve_HighlightedDrugs.pdf")
+pdf(plot.file, paper = "a4", width = 10, height = 8)
+
+for (i in seq_len(n)) {
+  print(
+    gg + facet_wrap_paginate(~ Isolate, ncol = 2, nrow = 1, scales = "fixed", page = i)
+  )
+}
+
+dev.off()
+
+
+
+```
+
+#6. Export table of results
+```{r}
+Export.1.CFU.lcf.df <- MTB.correlation.df %>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         mc27000_PBSstarved_LiveCellFraction.d3,
+         mc27000_PBSstarved_LiveCellFraction.d7,
+         mc27000_logGrowth_LiveCellFraction.d3,
+         mc27000_logGrowth_LiveCellFraction.d7)
+
+
+# Reshape the dataframe to wide format
+Export.2.CFU.lgfold.df <- MTB.CFU.df %>%
+  pivot_longer(
+    cols = starts_with("logFC"),  # Pivot only logFC columns
+    names_to = "Timepoint", 
+    values_to = "Value"
+  ) %>%
+  mutate(NewVariable = paste(Isolate, Timepoint, sep = "_")) %>% # Create new column names
+  select(-Isolate, -Timepoint) %>%  # Remove old columns after combining them
+  pivot_wider(names_from = NewVariable, values_from = Value)
+  
+
+str(CFU.TKC.df)
+
+  # Reshape the dataframe to wide format
+Export.3.CFUperml.df <-CFU.TKC.df %>%
+  ungroup()%>%
+  mutate(NewVariable = paste(Isolate, "mean_log10CFU_day", Day, sep = "_")) %>%  # Create new column names
+  select(
+         DrugCombination,
+         NewVariable,
+         mean_log10CFU) %>%  # Remove old columns after incorporating them
+  pivot_wider(names_from = NewVariable, values_from = mean_log10CFU)  # Reshape to wide format
+
+
+
+Export.3.CFUperml.df <-Export.3.CFUperml.df %>%
+  mutate(RegimenAbbreviation = gsub("-","",DrugCombination))%>%
+  select(RegimenAbbreviation,
+        mc27000_PBSstarved_mean_log10CFU_day_0,
+        mc27000_PBSstarved_mean_log10CFU_day_3,
+        mc27000_PBSstarved_mean_log10CFU_day_7,
+        mc27000_logGrowth_mean_log10CFU_day_0,
+        mc27000_logGrowth_mean_log10CFU_day_3,
+        mc27000_logGrowth_mean_log10CFU_day_7)
+```
+
+
+```{r}
+Export.Final <- left_join(Export.3.CFUperml.df ,
+                          Export.1.CFU.lcf.df)
+
+
+Export.Final <- left_join(Export.Final,
+                          Export.2.CFU.lgfold.df)
+
+Export.Final <- Export.Final %>%
+  select(RegimenAbbreviation,
+         RegimenName,
+         RMM.2021,
+         BMM.2021,
+         BMM.BHeB.in.C3HeB.FeJ.2021,
+         Clinical.2022,
+         everything())
+
+# Get the current date in YYYYMMDD format
+current_date <- format(Sys.Date(), "%Y%m%d")
+
+# Construct the filename with the date before ".csv"
+output_filename <- paste0(info.res, "/","MTBcfu_resultstable_",
+                          current_date,
+                          ".csv",
+                          sep="")
+
+# Write the CSV file
+write.csv(Export.Final ,
+          output_filename, 
+          row.names = FALSE)
+
+
+```
+
+```{r}
+
+```
+

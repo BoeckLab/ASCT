@@ -1,0 +1,884 @@
+# ================================================================
+# Aim
+# ================================================================
+# This script summarises single-cell tracking quality across ASCT
+# experiments by reporting the number of tracked cells per well and
+# plotting time-kill curves for isolate 1304 (lab label - paper label 328).
+#
+# Functions:
+# - Load Trkv2 tracking + KF data (72h endpoint, QC-filtered; 2 SD
+#   Mahalanobis exclusion upstream).
+# - Extract tracked-cell counts (t = 0), filter ≥ 1000 cells, and
+#   compute mean ± SEM per drug.
+# - Generate isolate 1304 time-kill curves:
+#     * Fig 1d – all drugs at 20× MIC (mean ± SEM)
+#     * Fig 1e – TGC dose response (5–25× MIC)
+# - Export: summary tables + figure PDFs.
+
+# Section 1: Defining variables
+```{r setup, include=FALSE}
+
+info.genDir <- getwd() 
+
+
+#Pop data variables
+
+info.wdDir <- info.genDir
+
+info.res.dir <- paste(info.genDir,"/Fig_Results" ,sep="")
+
+
+setwd(info.wdDir)
+
+
+# EDIT the time scale axis that should be used 
+plot.xaxis.time.scale <- c(0,24,48,72)
+
+```
+
+# Section 2: Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+
+```
+
+## 2.1 Loop through Experimental Results
+```{r}
+
+Main.Tracking.df <- data.frame()
+
+Main.KF.df <- data.frame()
+#expID <- list.of.Abx.cons[12]
+expID <- c("ASCTdr.02.20250717")
+info.list.expID <-  expID 
+for ( expID in info.list.expID ) {
+  
+  
+
+
+path.subdir <- paste("Experimental-Results",
+                     sep="")
+
+list.of.pop.data.Dir  <- paste(info.wdDir,
+                                    "/ASCTdr.02",
+                               "/",
+                         path.subdir,
+                         "/",
+                                    sep ="")
+
+
+  
+  # Load KF.intermediary table
+      KFinter.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_KFintermediary.csv", full.names = TRUE)
+
+
+    KF.intermediary.df <- read.csv(      KFinter.files)
+    
+    
+         KF.intermediary.df <-   KF.intermediary.df %>%
+           filter(Merge.def == "Trkv2_Ila2BaSic")%>%
+           select(ExpFile,
+                  Abx.con,
+                  Well_coordinate,
+                  Multiple.Events)%>%
+           distinct()
+
+         
+         
+rm(  KFinter.files)
+
+# Load Trkv2 Flags
+      Tracking.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_LCF_flags.csv", full.names = TRUE)
+
+  Tracking.df <- read.csv(      Tracking.files )
+  
+    Tracking.df<-   Tracking.df %>%
+      filter(Time.Kill.Definitions == "Trkv2_LCF_Ila2BaSic")%>%
+      left_join(         KF.intermediary.df )
+    
+    
+    Main.Tracking.df <- rbind(    Main.Tracking.df,
+                                     Tracking.df )
+    
+         KFraw.files <- list.files(list.of.pop.data.Dir, pattern = "_Trkv2_rawKF.csv", full.names = TRUE)
+
+     
+    KFraw <- read.csv(        KFraw.files )
+    
+    KFraw <-KFraw %>%
+      filter(Killing.Def == "Trkv2_LCF_Ila2BaSic")
+    
+    
+    Main.KF.df <- rbind(    Main.KF.df ,   KFraw )
+    
+    rm(  Tracking.df ,
+            Tracking.files,
+             KF.intermediary.df,
+         KFraw)
+    
+    
+}
+
+```
+
+# Filter for isolate 1304 as per LB request
+
+Yes, lets use 1304; TGC (5 concentrations 5-25 for dose response); and can you plot 10x of all Abx.cons in one plot (or 20x if this looks nicer), and do you have one well with enough cells (maybe mox 10x) to do figure 1c - then we would have all 3 figures using the same isolate
+```{r}
+Main.KF.df <- Main.KF.df %>%
+  filter(Isolate == "1304")
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  filter(Isolate == "Iso.1304")
+
+```
+
+
+```{r}
+# ---
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Killing.Def = gsub("Trkv2_LCF_Ila2BaSic","Trkv2_Ila2BaSic", Killing.Def))
+  
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Time_Hrs = gsub("h","",Sub.KF)) %>%
+  mutate(Time_Hrs = as.numeric(Time_Hrs))%>%
+  mutate(Time.Kill.Definitions = Killing.Def)%>%
+  mutate(Isolate = paste("Iso.", Isolate, sep=""))%>%
+  mutate(LC.fraction.corr = value)%>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+  select(ExpFile,
+         Abx.con,
+         Isolate,
+         ExpFile.Wellcoordinate ,
+         Well_coordinate,
+         Time_Hrs,
+         Time.Kill.Definitions ,
+         LC.fraction.corr)%>%
+  distinct()%>%
+  filter(Time_Hrs == 72) # KEEPING ONLY 72h KF
+  
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  ungroup()%>%
+  filter(Overall.Assessment == "Keep" & 
+           Multiple.Events == "Keep")
+
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+  select(-Overall.Assessment,
+         -Multiple.Events,
+         -Flag.label)
+
+
+Main.Tracking.df <- Main.Tracking.df %>%
+mutate(timestep = as.numeric(timestep))
+
+
+list.of.Well.coordinates.Kept.in.analysis <- unique(Main.Tracking.df$ExpFile.Wellcoordinate)
+
+Main.KF.df <- Main.KF.df %>%
+  filter(ExpFile.Wellcoordinate %in% list.of.Well.coordinates.Kept.in.analysis)
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(timestep = as.numeric(31.5))
+
+# Assume your y-axis linear scale values range from 1 to 100%
+
+linear_breaks <- c( 40,50,60 ,70,80,90, 100) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+Main.KF.df  <- Main.KF.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+Main.Tracking.df.OG <-Main.Tracking.df 
+
+```
+
+
+```{r}
+Main.Tracking.df <- Main.Tracking.df %>%
+  select(ExpFile,
+         Abx.con,
+         Isolate,
+         Well_coordinate,
+         timestep,
+         Time_Hrs,
+         LC.fraction.corr)
+
+Main.KF.df <- Main.KF.df %>%
+  select(ExpFile ,
+          Abx.con,
+         Isolate,
+         Well_coordinate,
+         timestep,
+         Time_Hrs,
+         LC.fraction.corr)
+```
+
+# Merging Killing Features and Main tracking Data 
+```{r}
+
+Main.Tracking.df <- rbind(Main.Tracking.df,
+                          Main.KF.df)
+
+
+rm(Main.KF.df)
+
+```
+
+
+
+```{r}
+Main.Tracking.df.All.concentrations <- Main.Tracking.df
+
+Main.Tracking.df.updated.SelectIso  <-Main.Tracking.df  %>%
+  mutate(Concentration = case_when(
+    grepl("20x", Abx.con) ~ "20x",
+    grepl("10x", Abx.con) ~ "10x",
+    TRUE ~ NA_character_  # This will handle any cases that do not match "20x" or "10x"
+  ))%>%
+  
+  mutate(Abx = sub("\\_.*", "", Abx.con))%>%
+  mutate(Abx = sub("c","", Abx),
+         Abx = sub("b","",Abx))%>%
+  drop_na()
+
+```
+
+
+# Plot: Tracking data single isolates and replicates which were present across all Abx.cons 
+```{r}
+library(ggrepel)
+library(ggforce)
+library(ggpubr)
+
+Plot.export <- paste(info.res.dir,"/","ASCTfig_Trk_SingleIso_AcrossAbx.cons_10x20x_Rep.pdf", sep = "")
+
+# Define the Zizio palette for Abx
+zizio_colors <- c(
+  "FOX"  = "#F94144",  # Red (Bactericidal)
+  "MXF"  = "#F3722C",  # Orange (Bactericidal)
+  "IPM"  = "darkred",  # black (Bactericidal)
+  "AMK"  = "#DAA520",  # Dark Yellow (Bactericidal)
+  "TGC"  = "#90BE6D",  # Green (Bacteriostatic)
+  "LIN"  = "#1D7874",  # Deep Teal (Bacteriostatic)
+    "MIN"  = "#577590",  # Slate Blue (Bacteriostatic)
+  "AZM"  = "darkblue"   # Navy Blue (Bacteriostatic)
+)
+
+# Reorder Abx levels to ensure bactericidal Abx.cons are plotted first
+Main.Tracking.df.updated.SelectIso $Abx <- factor(Main.Tracking.df.updated.SelectIso $Abx, levels = c("AMK", "FOX", "IPM", "MXF", "TGC", "LIN", "MIN", "AZM"))
+
+# Plot with the Zizio colors and free scales for x and y
+gg <- Main.Tracking.df.updated.SelectIso  %>%
+  filter(Abx != "CLO") %>%  # Filter out CLO if needed
+   filter(Abx != "BDQ") %>%  # Filter out CLO if needed
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+    ggplot(aes(x = Time_Hrs, 
+               y = LC.fraction.corr, 
+               group = ExpFile.Wellcoordinate, 
+               label = Isolate,
+               color = Abx,
+               alpha = Concentration)) +
+    geom_line(size = 0.1) +
+    theme_pubr() +
+    scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8, 1), limits = c(0, 1)) +
+    scale_x_continuous(breaks = c(0, 24, 48, 72)) +
+    scale_alpha_manual(values = c("20x" = 1, "10x" = 0.5), guide = "none") +  # Remove alpha legend
+    scale_color_manual(values = zizio_colors) +
+    theme(axis.text = element_text(size = 8),
+          strip.text.x = element_text(size = 7),
+          strip.background = element_rect(fill = "white", color = "white"), # White background and no border
+          legend.key.size = unit(0.5, "cm"),
+          legend.key.width = unit(0.5, "cm"),
+          legend.position = "bottom",  # Position legend at the bottom
+          aspect.ratio = 1) +
+    labs(
+        x = "Time [Hrs]",
+        y = "Live cell fraction",
+        color = "Antibiotic") +  # Label the color legend for Abx
+    guides(alpha = "none") +  # Remove the alpha legend
+    facet_wrap_paginate(~Isolate + Concentration,  scales = "free",
+                        ncol = 2,
+                        nrow = 1,
+                        page = 1)
+
+# Determine the number of pages
+n <- n_pages(gg)
+
+# Export the plots to a PDF
+pdf(Plot.export, paper = "a4", width = 20, height = 15)
+for(i in 1:n) {
+    print(gg + facet_wrap_paginate(Isolate ~ Concentration, scales = "free",
+                      ncol = 2,
+                      nrow = 1, 
+                      page = i))
+}
+dev.off()
+
+# Housekeeping
+rm(gg, Plot.export)
+
+```
+
+
+
+```{r}
+How.many.Iso.replicates <- Main.Tracking.df.updated.SelectIso %>%
+  filter(Isolate %in% c("Iso.1304")) %>%
+  filter(Concentration == "20x") %>%
+  select(ExpFile, Abx.con, Isolate, Well_coordinate) %>%
+  distinct() %>%
+  group_by(Isolate, Abx.con) %>%
+  summarise(Replicate_count = n_distinct(Well_coordinate))
+  
+```
+
+#Plot 2: Select isolates  and plot 95% confidence interval/ SEM
+
+```{r}
+MAB.df.summary <- Main.Tracking.df.updated.SelectIso %>%
+
+  group_by(ExpFile,
+           Isolate,
+           Abx.con,
+           timestep) %>%
+
+  summarise(
+    Mean_Time = mean(Time_Hrs, na.rm = TRUE),
+    Mean_LC = mean(LC.fraction.corr, na.rm = TRUE),
+    SD_LC = sd(LC.fraction.corr, na.rm = TRUE),
+    N = n(),
+    SEM_LC = ifelse(N > 1, SD_LC / sqrt(N), NA),  # Standard Error of the Mean, set to NA if N <= 1
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    CI_Lower = ifelse(N > 1, Mean_LC - qt(0.975, df = N - 1) * SEM_LC, NA),  # 95% CI lower bound
+    CI_Upper = ifelse(N > 1, Mean_LC + qt(0.975, df = N - 1) * SEM_LC, NA)   # 95% CI upper bound
+  )
+MAB.df.summary <-MAB.df.summary %>%
+  ungroup()%>%
+  mutate(Concentration = case_when(
+    grepl("20x", Abx.con) ~ "20x",
+    grepl("10x", Abx.con) ~ "10x",
+    TRUE ~ NA_character_  # This will handle any cases that do not match "20x" or "10x"
+  ))%>%
+  
+  mutate(Abx = sub("\\_.*", "", Abx.con))%>%
+  mutate(Abx = sub("c","", Abx),
+         Abx = sub("b","",Abx))
+
+```
+
+
+
+
+Aim: reviewer asked for the number number of tracked cells for fig 1d of manuscript
+# Load tracking number information
+```{r}
+
+info.tracking.data.path <- c("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCT/ASCT_Figures/26_ASCT_Fig1_Optimisation/ASCTdr_Fig1_with_Iso.1304/Fig1d_SingleConcentration_All_ASCTdrugs/ASCTdr.02/Experimental-Results/ASCTdr.02.20250717_Trkv2_LCF_flags.csv")
+
+
+trk.df <- read.csv(info.tracking.data.path)
+
+
+trk.df <- trk.df %>%
+  filter(timestep == 0)%>%
+  mutate(Exp.ID = ExpFile)%>%
+  filter(Isolate =="Iso.1304")%>%
+  filter(Abx.con != "7H9_0x")%>%
+  mutate(Total.N.tracked.cells = T_Tot.N)%>%
+
+  select(Exp.ID,
+Isolate,
+         Well_coordinate,
+         Abx.con,
+        Total.N.tracked.cells)%>%
+  filter(Total.N.tracked.cells  >= 1000)%>%
+  distinct()
+
+
+
+# 1. Count replicates per Abx.con × Isolate
+Replicate.count <- trk.df %>%
+  group_by(Isolate, Abx.con) %>%
+  summarise(n_replicates = n(), .groups = "drop")
+
+# 2. Join replicate count back into trk.df
+trk.df <- left_join(trk.df, Replicate.count, by = c("Isolate", "Abx.con"))
+
+
+trk.df.export <- trk.df %>%
+    filter(str_detect(Abx.con, "20x|TGC")) %>%
+
+    mutate(Isolate = gsub("Iso.","",Isolate))
+
+
+
+# 3. Summarise tracking stats, keeping n_replicates
+trk.df <- trk.df %>%
+  filter(str_detect(Abx.con, "20x|TGC")) %>%
+  group_by(Abx.con, Isolate) %>%
+  summarise(
+    Mean.N.tracked.cells = round(mean(Total.N.tracked.cells, na.rm = TRUE)),
+    SEM.N.tracked.cells  = round(sd(Total.N.tracked.cells, na.rm = TRUE) / sqrt(n())),
+    Abx.con = first(Abx.con),
+    n_replicates = first(n_replicates),
+    .groups = "drop"
+  )
+
+trk.df <- trk.df %>%
+  mutate(Isolate = gsub("Iso.","",Isolate))
+
+
+rm(Replicate.count )
+
+```
+
+### Export tracking Numbers for isolate.1304
+```{r}
+trk.df.export <- trk.df.export %>%
+  ungroup()%>%
+  group_by(Isolate,Abx.con)%>%
+    filter(str_detect(Abx.con, "20x|TGC")) %>%
+  mutate(Replicate = 1,
+         Replicate = cumsum(Replicate))%>%
+  ungroup()%>%
+  mutate(Abx_Replicate = paste("Ncells_",
+                               Abx.con,
+                               "_rep",
+                               Replicate,
+                               sep="") )
+
+
+trk.df.export.sub <- trk.df.export %>%
+  mutate(Isolate= paste("Iso.",Isolate,
+                        sep=""))%>%
+  select(Isolate,
+         Abx.con,
+        Abx_Replicate,
+         Total.N.tracked.cells)%>%
+  group_by(Isolate,
+           Abx.con)%>%
+  mutate( 
+  Mean.N.tracked.cells = floor(mean(Total.N.tracked.cells, na.rm = TRUE)),
+SEM.N.tracked.cells  = floor(sd(Total.N.tracked.cells, na.rm = TRUE) / sqrt(n())))%>%
+  ungroup()%>%
+  select(-Abx.con)
+
+trk.df.export.sub1 <- trk.df.export.sub %>%
+  select(Isolate,
+         Abx_Replicate,
+        Total.N.tracked.cells )
+
+
+trk.df.export.sub1.wide <- trk.df.export.sub1  %>%
+  pivot_wider(
+    names_from = Abx_Replicate,
+    values_from = c(Total.N.tracked.cells)
+  )
+
+trk.df.export.sub2 <- trk.df.export.sub %>%
+    mutate(Abx_Condition = str_extract(Abx_Replicate, ".*(?=_rep\\d+)")) %>%
+  mutate(Mean_Abx_Condition = sub("Ncells_","Mean.n_",Abx_Condition))%>%
+  select(Isolate,
+         Mean_Abx_Condition,
+         Mean.N.tracked.cells )%>%
+  ungroup()%>%
+  distinct()%>%
+   pivot_wider(
+    names_from = Mean_Abx_Condition,
+    values_from = c(Mean.N.tracked.cells)
+  )
+
+trk.df.export.sub3 <- trk.df.export.sub %>%
+    mutate(Abx_Condition = str_extract(Abx_Replicate, ".*(?=_rep\\d+)")) %>%
+  mutate(SEM_Abx_Condition = sub("Ncells_","SEM.n_",Abx_Condition))%>%
+  select(Isolate,
+         SEM_Abx_Condition,
+        SEM.N.tracked.cells  )%>%
+  ungroup()%>%
+  distinct()%>%
+   pivot_wider(
+    names_from = SEM_Abx_Condition,
+    values_from = c(SEM.N.tracked.cells )
+  )
+
+trk.df.export.Final <- left_join(trk.df.export.sub1.wide ,
+                                 trk.df.export.sub2)
+
+trk.df.export.Final <- left_join(trk.df.export.Final ,
+                                trk.df.export.sub3  )
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(stringr)
+
+# Suppose your wide table is called trk.df.export.Final
+# 1. Pivot all Ncells_... columns into long format
+df_long <- trk.df.export.Final %>%
+  pivot_longer(
+    cols = starts_with("Ncells_"),
+    names_to = "Drug_rep",
+    values_to = "Ncells"
+  )
+
+# 2. Extract Drug and replicate info from column names
+# "Ncells_TGC_10x_rep3" -> Drug = "TGC10x", Rep = 3
+df_long <- df_long %>%
+  mutate(
+    # Remove the "Ncells_" prefix
+    Drug_rep = str_remove(Drug_rep, "^Ncells_"),
+    # Extract replicate number
+    Rep = str_extract(Drug_rep, "rep\\d+$"),
+    Rep = str_remove(Rep, "rep"),
+    # Remove _repX from Drug_rep to keep only drug+concentration
+    Drug = str_remove(Drug_rep, "_rep\\d+$"),
+    Drug = str_replace_all(Drug, "_", ""),  # remove any underscores (e.g., TGC_10x)
+    Drug = str_replace(Drug, "(\\d+)x$", "\\1x") # just in case
+  ) %>%
+  select(Isolate, Drug, Rep, Ncells)
+
+# 3. Pivot wider to get columns rep1, rep2, rep3...
+df_wide <- df_long %>%
+  pivot_wider(
+    names_from = Rep,
+    values_from = Ncells,
+    names_prefix = paste0(unique(df_long$Isolate), "_Ncells_rep")
+  )
+
+# 4. Add Mean and SEM
+df_wide <- df_wide %>%
+  rowwise() %>%
+  mutate(
+    Mean = round(mean(c_across(matches("Ncells_rep")), na.rm = TRUE), 0),
+    SD   = round(sd(c_across(matches("Ncells_rep")), na.rm = TRUE), 0),
+    SEM  = round(sd(c_across(matches("Ncells_rep")), na.rm = TRUE) /
+                   sqrt(sum(!is.na(c_across(matches("Ncells_rep"))))), 0),
+  ) %>%
+  ungroup()
+
+df_wide <- df_wide %>%
+select(-Isolate)
+
+df_wide$Drug <- sub("([A-Za-z]+)([0-9])", "\\1.\\2", df_wide$Drug)
+
+
+df_wide <- df_wide %>%
+filter(Drug !="TGC.30x")%>%
+    arrange(Drug)
+
+# 5. Export to CSV
+write.csv(df_wide,  paste(info.res.dir, "/","SuppTable_Fig.1d_N.of.tracked.cells_SD.csv",sep=""),
+           row.names = FALSE)
+
+```
+
+```{r}
+rm(df_long,
+   df_wide,
+   #trk.df,
+   trk.df.export,
+   trk.df.export.Final,
+   trk.df.export.sub,
+   trk.df.export.sub1,
+   trk.df.export.sub2,
+   trk.df.export.sub3,
+   trk.df.export.sub1.wide)
+```
+
+
+```{r}
+library(ggrepel)
+library(ggforce)
+library(ggpubr)
+
+Plot.export <- paste(info.res.dir, "/", "ASCTfig_Trk_SingleIso_1304_AcrossAbx.cons20x_SEM_tracking.N.pdf", sep = "")
+
+# Define the Zizio palette for Abx
+zizio_colors <- c(
+  "FOX"  = "#F94144",  # Red (Bactericidal)
+  "MXF"  = "#F3722C",  # Orange (Bactericidal)
+  "IPM"  = "darkred",  # Dark Red (Bactericidal)
+  "AMK"  = "#DAA520",  # Dark Yellow (Bactericidal)
+  "TGC"  = "#90BE6D",  # Green (Bacteriostatic)
+  "LIN"  = "#1D7874",  # Deep Teal (Bacteriostatic)
+  "MIN"  = "#577590",  # Slate Blue (Bacteriostatic)
+  "CLO"  = "steelblue",  # Slate Blue (Bacteriostatic)
+  "AZM"  = "darkblue"   # Navy Blue (Bacteriostatic)
+)
+
+MAB.df.summary.Trk.N <- MAB.df.summary
+# Reorder Abx levels to ensure bactericidal Abx.cons are plotted first
+MAB.df.summary.Trk.N$Abx <- factor(MAB.df.summary.Trk.N$Abx, levels = c("AMK", "FOX", "IPM", "MXF", "TGC", "LIN", "MIN", "AZM"))
+MAB.df.summary.Trk.N <- MAB.df.summary.Trk.N %>%
+  filter(Abx != "CLO") %>%  # Filter out CLO if needed
+  filter(Abx != "BDQ") %>%  # Filter out BDQ if needed
+  filter(Concentration == "20x") 
+
+trk.df <- trk.df %>%
+  mutate(Isolate = paste("Iso.",Isolate,sep=""))
+
+MAB.df.summary.Trk.N <-left_join(MAB.df.summary.Trk.N ,
+                                 trk.df)
+
+
+```
+
+# Plotting fig 1 d: Iso. 1304 across different drugs; same concentraiton
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(ggforce)
+library(ggrepel)
+
+Plot.export <- paste(info.res.dir, "/", "Manuscript_Fig1d_Iso.1304_DifferentDrugs20x_SEM_tracking.pdf", sep = "")
+
+# Define Zizio palette
+zizio_colors <- c(
+  "FOX" = "#D62728",  # Cefoxitin (red)
+  "IPM" = "#B22222",  # Imipenem (dark red)
+  "MXF" = "#FFA54B",  # Moxifloxacin (orange)
+  "AMK" = "#9467BD",  # Amikacin (purple)
+  "TGC" = "#1F77B4",  # Tigecycline (blue)
+  "LIN" = "#17BECF",  # Linezolid (cyan-blue)
+  "MIN" = "#2CA02C",  # Minocycline (green)
+  "AZM" = "#98DF8A"   # Azithromycin (light green)
+)
+
+
+
+# Prepare labels at end of each curve (last time point)
+MAB.labels <- MAB.df.summary.Trk.N %>%
+  group_by(ExpFile, Isolate, Abx.con) %>%
+  filter(Mean_Time == max(Mean_Time, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(
+    label_text = ifelse(Abx == "FOX", "Cefoxitin",
+                 ifelse(Abx == "IPM", "Imipenem",
+                 ifelse(Abx == "MXF", "Moxifloxacin",
+                 ifelse(Abx == "AMK", "Amikacin",
+                 ifelse(Abx == "TGC", "Tigecycline",
+                 ifelse(Abx == "LIN", "Linezolid",
+                 ifelse(Abx == "MIN", "Minocycline",
+                 ifelse(Abx == "AZM", "Azithromycin", Abx)))))))),
+    ExpFile.Iso.Abx = paste(ExpFile, Isolate, Abx.con, sep = "_")
+  )
+
+# Main ggplot
+# Main ggplot
+gg <- MAB.df.summary.Trk.N %>%
+  mutate(ExpFile.Iso.Abx = paste(ExpFile, Isolate, Abx.con, sep = "_")) %>%
+  ggplot(aes(x = Mean_Time,
+             y = Mean_LC * 100,   # convert to %
+             group = ExpFile.Iso.Abx,
+             color = Abx,
+             alpha = Concentration)) +
+
+  geom_line(size = 0.8) +
+  geom_ribbon(aes(ymin = (Mean_LC - SEM_LC) * 100,
+                  ymax = (Mean_LC + SEM_LC) * 100,
+                  fill = Abx),
+              alpha = 0.2, color = NA) +
+
+  # Add full drug name labels at the exact y-position of the last point,
+  # nudged a bit to the right and slightly higher
+  geom_text(
+    data = MAB.labels,
+    aes(x = Mean_Time, y = Mean_LC * 100, label = label_text),
+    hjust = 0,
+    nudge_x = -3,    # shift labels to the right
+    nudge_y = 2,    # move slightly upwards (in percentage units)
+    size = 3,
+    inherit.aes = TRUE
+  ) +
+
+  theme_pubr() +
+  scale_y_continuous(breaks = seq(0, 100, 20),
+                     limits = c(0, 100)) +
+  scale_x_continuous(breaks = c(0, 24, 48, 72),
+                     limits = c(0, 80)) +   # extra space for labels
+  scale_alpha_manual(values = c("20x" = 1, "10x" = 1), guide = "none") +
+  scale_color_manual(values = zizio_colors) +
+  scale_fill_manual(values = zizio_colors) +
+  theme(
+    strip.background = element_rect(fill = "white", color = "white"),
+    legend.key.size = unit(0.5, "cm"),
+    legend.key.width = unit(0.5, "cm"),
+    legend.position = "none",
+    aspect.ratio = 1,
+    axis.ticks = element_blank(),
+    axis.title = element_text(size = 14)  , # bigger axis titles
+      axis.text = element_text(size = 12)    # bigger + bold tick labels
+  ) +
+  labs(
+    x = "Antibiotic exposure (hours)",
+    y = "Fraction bacteria alive (%)",
+    subtitle = "Mean and SEM (shaded) per Isolate",
+    color = "Antibiotic"
+  ) +
+  guides(alpha = "none") +
+  facet_wrap_paginate(~Isolate + Concentration, scales = "free",
+                      ncol = 1, nrow = 1, page = 1)
+
+# Export to PDF
+n <- n_pages(gg)
+pdf(Plot.export, paper = "a4", width = 20, height = 15)
+for (i in 1:n) {
+  print(gg + facet_wrap_paginate(Isolate ~ Concentration, scales = "free",
+                                 ncol = 1, nrow = 1, page = i))
+}
+dev.off()
+
+rm(gg, MAB.labels, Plot.export)
+
+
+
+
+
+```
+
+
+# Plotting fig 1e Iso.1304  dose dependency TGC
+
+```{r}
+MAB.df.summary.TGC <- Main.Tracking.df.All.concentrations %>%
+  group_by(ExpFile,
+           Isolate,
+           Abx.con,
+           timestep) %>%
+    filter(str_detect(Abx.con, "TGC")) %>%
+  summarise(
+    Mean_Time = mean(Time_Hrs, na.rm = TRUE),
+    Mean_LC = mean(LC.fraction.corr, na.rm = TRUE),
+    SD_LC = sd(LC.fraction.corr, na.rm = TRUE),
+    N = n(),
+    SEM_LC = ifelse(N > 1, SD_LC / sqrt(N), NA),  # Standard Error of the Mean, set to NA if N <= 1
+    .groups = 'drop'
+  )
+
+MAB.df.summary.TGC <- MAB.df.summary.TGC %>%
+  mutate(Concentration = sub("^[^_]*_", "", Abx.con))%>%
+  mutate(Concentration = sub("x","",Concentration))%>%
+  mutate(Concentration = as.numeric(Concentration))
+
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(ggforce)
+
+# Make sure Concentration is numeric
+MAB.df.summary.TGC <- MAB.df.summary.TGC %>%
+  mutate(Concentration = sub("^[^_]*_", "", Abx.con),
+         Concentration = sub("x", "", Concentration),
+         Concentration = as.numeric(Concentration))
+
+# Keep only 5–25 range
+MAB.df.summary.TGC <- MAB.df.summary.TGC %>%
+  filter(Concentration >= 5 & Concentration <= 25)
+
+# Export file
+Plot.export <- paste0(info.res.dir, "/",
+                      "Manuscript_Fig1e_Iso.1304_TGC_concentration_alpha.pdf")
+
+gg <- MAB.df.summary.TGC %>%
+  mutate(ExpFile.Iso.Abx = paste(ExpFile, Isolate, Abx.con, sep = "_")) %>%
+  ggplot(aes(x = Mean_Time,
+             y = Mean_LC * 100,
+             group = Abx.con,
+             alpha = Concentration)) +  # alpha mapped to concentration
+
+  # Lines and ribbons in same blue color
+  geom_line(color = "#1F77B4", size = 0.8) +
+  geom_ribbon(aes(ymin = (Mean_LC - SEM_LC) * 100,
+                  ymax = (Mean_LC + SEM_LC) * 100),
+              fill = "#1F77B4",
+              alpha = 0.2,
+              color = NA) +
+
+  theme_pubr() +
+  scale_y_continuous(breaks = seq(0, 100, 20),
+                     limits = c(0, 100)) +
+  scale_x_continuous(breaks = c(0, 24, 48, 72),
+                     limits = c(0, 80)) +
+  # Map alpha from 0.3 to 1 for concentration
+  scale_alpha_continuous(range = c(0.2, 1)) +
+
+  theme(
+    strip.background = element_rect(fill = "white", color = "white"),
+    legend.key.size = unit(0.5, "cm"),
+    legend.key.width = unit(0.5, "cm"),
+    legend.position = "right",
+    aspect.ratio = 1,
+    axis.ticks = element_blank(),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12)
+  ) +
+  labs(
+    x = "Antibiotic exposure (hours)",
+    y = "Fraction bacteria alive (%)",
+    subtitle = "Mean and SEM (shaded) per Isolate",
+    alpha = "TGC concentration\n(x MIC)"
+  ) +
+  facet_wrap_paginate(~Isolate , scales = "free",
+                      ncol = 1, nrow = 1, page = 1)
+
+# Export
+n <- n_pages(gg)
+pdf(Plot.export, paper = "a4", width = 20, height = 15)
+for (i in 1:n) {
+  print(gg + facet_wrap_paginate(~Isolate , scales = "free",
+                                 ncol = 1, nrow = 1, page = i))
+}
+dev.off()
+
+rm(gg, Plot.export)
+
+
+```
+
+```{r}
+
+```
+

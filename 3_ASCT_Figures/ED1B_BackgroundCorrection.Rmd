@@ -1,0 +1,320 @@
+---
+title: "ASCT_Val3.4_Segmentation"
+output: html_document
+date: "2024-08-02"
+---
+# ================================================================
+# Aim
+# ================================================================
+# Demonstrate that BaSiC flat-field/background correction:
+# (i) removes frame-dependent fluorescence noise and
+# (ii) aligns the trough (mode) of the PI intensity distributions
+#     across timepoints in time-lapse images.
+
+# Functionality:
+# - Loads matched PI fluorescence tables (corrected & uncorrected)
+#   and corresponding BF segmentation for object IDs.
+# - Reshapes to long format and compares per-object intensity
+#   distributions over timesteps.
+# - Plots log10-intensity density curves ± peak locations for
+#   corrected vs uncorrected data to visualise alignment over time.
+
+# 1. Define variables
+```{r}
+
+
+info.wdDir <- getwd()
+info.resDir <- paste(info.wdDir,
+                     "/Fig_Results",
+                     sep ="")
+
+#---- Path to ASCT FLuncorr data
+  ## Go back one level from the current working directory
+  setwd("..")
+
+  ## Change to the ASCT_nd2_images/ASCT_FL_images directory
+  setwd("FLcorr_H5")
+
+  ## Get the current working directory
+  info.FLcorrDir <- getwd()
+  setwd(  info.FLcorrDir)
+  
+  
+#---- Path to FLcorr data
+ setwd("..")
+
+  ## Change to the ASCT_nd2_images/ASCT_FL_images directory
+  setwd("FLuncorr_H5")
+  
+    info.FLuncorrDir <- getwd()
+    setwd(    info.FLuncorrDir)
+    
+    
+  
+#---- Path to MOC data
+ setwd("..")
+
+  ## Change to the ASCT_nd2_images/ASCT_FL_images directory
+  setwd("BF_H5")
+  
+    info.MOCDir <- getwd()
+    setwd(    info.MOCDir)
+
+```
+
+# 2. load libraries
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+
+
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+
+library(ggExtra)
+
+library(wesanderson)
+
+
+library(grid)  # Load the grid package allows you to add text to pages in ggplot
+
+# For classification assement
+library(caret)
+```
+
+# 3. Load data
+## 3.1 FL corrected data
+```{r}
+FLcorr.df <- data.frame()
+
+  
+
+  # List all files in the current directory
+    files <- list.files(info.FLcorrDir)
+    
+    # Filter files that end with 'ASCTassociation.csv'
+    csv_files <- files[grep("_FLcorr_table.csv$", files)]
+  # Loop through each of the CSV files and read them
+  for (csv_file in csv_files) {
+    
+      setwd(info.FLcorrDir)
+    # Read the CSV file
+    FLcorr.df.sub <- read.csv(csv_file)
+     FLcorr.df.sub <- FLcorr.df.sub %>%
+       mutate(ExpID = csv_file)
+    # Combine the data from the CSV file with the main data frame
+    FLcorr.df <- rbind(FLcorr.df, FLcorr.df.sub)
+  
+  rm(FLcorr.df.sub)
+  
+  }
+
+#Houskeeping
+    rm(csv_file,
+       csv_files)
+
+FLcorr.df <- FLcorr.df %>%
+  mutate(ExpID = gsub("_FLcorr_table.csv","",ExpID),
+         ExpID = gsub("POC-","", ExpID))%>%
+  mutate(Mean.Intensity.FLcorr = Mean.Intensity)%>%
+  
+  select(ExpID,
+    labelimage_oid,
+         
+         timestep,
+   Mean.Intensity.FLcorr,
+          Center.of.the.object_1,
+          Center.of.the.object_0)
+```
+
+## 3.2 FL uncorrected data
+```{r}
+FLuncorr.df <- data.frame()
+
+  
+  setwd(info.FLuncorrDir)
+  # List all files in the current directory
+    files <- list.files(info.FLuncorrDir)
+    
+    # Filter files that end with 'ASCTassociation.csv'
+    csv_files <- files[grep("_FLuncorr_table.csv$", files)]
+  
+  # Loop through each of the CSV files and read them
+  for (csv_file in csv_files) {
+    # Read the CSV file
+    FLuncorr.df.sub <- read.csv(csv_file)
+        FLuncorr.df.sub <-FLuncorr.df.sub %>%
+      mutate(ExpID = csv_file)
+    
+    # Combine the data from the CSV file with the main data frame
+    FLuncorr.df <- rbind(FLuncorr.df, FLuncorr.df.sub)
+  
+  rm(FLuncorr.df.sub)
+  
+  }
+
+#Houskeeping
+    rm(csv_file,
+       csv_files)
+
+FLuncorr.df <- FLuncorr.df %>%
+    mutate(ExpID = gsub("_FLuncorr_table.csv","",ExpID),
+         ExpID = gsub("POC-","", ExpID))%>%
+  mutate(Mean.Intensity.FLuncorr = Mean.Intensity)%>%
+  select(ExpID,
+         labelimage_oid,
+         timestep,
+         Mean.Intensity.FLuncorr,
+        Center.of.the.object_1,
+         Center.of.the.object_0)
+```
+
+## 3.3  MOC data
+```{r}
+
+MOC.df <- data.frame()
+
+  
+  setwd(info.MOCDir)
+  # List all files in the current directory
+    files <- list.files(info.MOCDir)
+    
+    # Filter files that end with 'ASCTassociation.csv'
+    csv_files <- files[grep("_BF_ASCT_table.csv$", files)]
+  
+  # Loop through each of the CSV files and read them
+  for (csv_file in csv_files) {
+    # Read the CSV file
+    MOC.df.sub <- read.csv(csv_file)
+        MOC.df.sub <-MOC.df.sub %>%
+      mutate(ExpID = csv_file)
+    
+    # Combine the data from the CSV file with the main data frame
+    MOC.df <- rbind(MOC.df, MOC.df.sub)
+  
+  rm(MOC.df.sub)
+  
+  }
+
+#Houskeeping
+    rm(csv_file,
+       csv_files)
+
+MOC.df <- MOC.df %>%
+    mutate(ExpID =gsub("_BF_ASCT_table.csv","",ExpID),
+         ExpID = gsub("MOC-","", ExpID))%>%
+  select(ExpID,
+         labelimage_oid,
+         timestep,
+         Predicted.Class,
+        Center.of.the.object_1,
+         Center.of.the.object_0)
+```
+
+# 4. Merge data
+```{r}
+#Joining with `by = join_by(timestep, labelimage_oid, Center.of.the.object_0, Center.of.the.object_1, Field, Exp, Well_coordinate)`
+
+Main.df <- left_join(FLcorr.df,
+                     FLuncorr.df,
+                     by = c("ExpID",
+                            "labelimage_oid",
+                            "timestep",
+                           "Center.of.the.object_1",
+                            "Center.of.the.object_0"
+                            ))
+
+
+Main.df <- Main.df %>%
+  drop_na()
+
+
+Main.df <- left_join(Main.df,
+                     MOC.df)
+
+rm(FLcorr.df,
+   FLuncorr.df,
+   MOC.df)
+```
+
+
+```{r}
+Main.df <- Main.df %>%
+  select(ExpID,
+         labelimage_oid,
+         timestep,
+         Center.of.the.object_1,
+         Center.of.the.object_0,
+         Mean.Intensity.FLuncorr,
+         Mean.Intensity.FLcorr)
+```
+
+
+
+```{r}
+str(Main.df)
+
+
+Main.df <- Main.df%>%
+  pivot_longer(cols = c(Mean.Intensity.FLuncorr, Mean.Intensity.FLcorr),
+               names_to = "Correction",
+               values_to = "Intensity_Value")
+
+
+str(Main.df )
+
+Main.df <- Main.df %>%
+  mutate(timestep =as.numeric(timestep))%>%
+ mutate(Correction = factor(if_else(Correction == "Mean.Intensity.FLuncorr", 
+                                     "Uncorrected", 
+                                     "BaSic corrected"),
+                             levels = c("Uncorrected", "BaSic corrected")))
+```
+
+
+
+
+```{r}
+
+
+color_palette <- wes_palette("Zissou1", 30, type = "continuous")
+
+
+# Create the density plot
+Main.df %>%
+ # filter(ExpID == "ASCTmut.03.20240522_I10_p05")%>%
+ggplot( aes(x = log10(Intensity_Value), color = factor(timestep), fill = factor(timestep))) +
+  geom_density(alpha = 1, fill = NA) +  # Set fill to NA to remove fill color
+  scale_color_manual(values = color_palette) +
+  scale_fill_manual(values = color_palette) +
+
+  labs(title = "Density Plot of PI singal intensity",
+       x = " Log10 fluorescence intensity",
+       y = "Density",
+       color = "Timestep",
+       fill = "Timestep") +
+  theme_prism(base_line_size = 8/14)+
+  theme(legend.text = element_text(size = 8),    # Adjust the size of the legend text
+        legend.title = element_text(size = 9),   # Adjust the size of the legend title (if needed)
+        legend.key.size = unit(0.5, "cm"))    +   # Adjust the size of the legend key
+    facet_wrap(~ Correction) 
+
+
+# Save the plot as a PDF in the Fig_Results directory
+ggsave(filename = "Fig_Results/ASCTsupp_Background.correction_Density.plot.pdf", 
+       plot = last_plot(), # Saves the last ggplot created
+       device = "pdf",
+       width = 10, height = 7) # Adjust width and height as needed
+
+```
+

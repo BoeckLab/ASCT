@@ -1,0 +1,1003 @@
+---
+title: "ASCTstarv.01"
+author: "Alex"
+date: "2025-08-25"
+output: html_document
+---
+# ================================================================
+# Aim
+# ================================================================
+# Quantify the fraction of viable M. abscessus immobilised in ASCT under
+# nutrient-rich and starvation conditions without antibiotic exposure and in borth culture.
+
+# This script:
+# - Loads MOC/POC single-cell classifications and timing metadata for
+#   ASCTstarv.01 gel experiments.
+# - Loads and processes standing-incubator PI data (no single-cell tracking)
+#   in parallel.
+# - Assigns conditions (PBSgel, 7H9gel, HI.PBSgel, PBS standing incubator)
+#   to each well.
+# - Baseline-corrects PI signal by removing pre-existing PI+ cells at t0 and
+#   expresses trajectories as fractions of the initial live population.
+# - Computes mean ± SEM of live and dead fractions over time per condition.
+# - Outputs:
+#     (i) live/dead fraction timecourses for PBSgel and 7H9gel,
+#     (ii) overlaid standing-incubator survival (yellow dots at 24 h and
+#          48 h, no single-cell tracking),
+#     (iii) a summary table of 48-h viable fractions (mean ± SEM).
+# Loading libraries
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(readr)   # faster than base read.csv
+
+library(reshape2)
+
+
+```
+
+
+# Defining paths
+```{r}
+info.wd.dir <- getwd()
+
+info.data.dir <- paste(info.wd.dir,
+                       "/Data/",
+                       sep="")
+info.res.dir  <- paste(info.wd.dir ,
+                       "/Experimental_Results/",
+                       sep="")
+
+```
+
+
+# Loading MOC files
+```{r}
+# Load required package
+library(dplyr)   # for bind_rows
+library(readr)   # faster than base read.csv
+
+# Set the folder containing your CSV files
+path <- paste(info.data.dir,
+              "ASCTstarv.01.20250813_MOCsimple/",
+              sep="")
+
+
+# Get list of all csv files in that folder
+files <- list.files(path, pattern = "\\.csv$", full.names = TRUE)
+
+# Read and combine into one data frame, keeping filename
+MOC.df <- files %>%
+  lapply(function(file) {
+    read_csv(file,show_col_types = FALSE) %>%
+      mutate(filename = basename(file))   # keep just the filename
+  }) %>%
+  bind_rows()
+```
+
+
+# Loading POC files
+```{r}
+
+
+# Set the folder containing your CSV files
+path <- paste(info.data.dir,
+              "ASCTstarv.01.20250813_POCsimple/",
+              sep="")
+
+
+# Get list of all csv files in that folder
+files <- list.files(path, pattern = "\\.csv$", full.names = TRUE)
+
+# Read and combine into one data frame, keeping filename
+POC.df <- files %>%
+  lapply(function(file) {
+    read_csv(file,show_col_types = FALSE) %>%
+      mutate(filename = basename(file))   # keep just the filename
+  }) %>%
+  bind_rows()
+```
+
+# Loading Metadata files
+```{r}
+# Set the folder containing your CSV files
+path <- paste(info.data.dir,
+              "ASCTstarv.01.20250813_Metadata/",
+              sep="")
+
+
+# Get list of all csv files in that folder
+files <- list.files(path, pattern = "\\.csv$", full.names = TRUE)
+
+# Read and combine into one data frame, keeping filename
+Metadata.df <- files %>%
+  lapply(function(file) {
+    read_csv(file,show_col_types = FALSE) %>%
+      mutate(filename = basename(file))   # keep just the filename
+  }) %>%
+  bind_rows()
+
+
+Metadata.df <- Metadata.df %>%
+  rename(
+    timestep = `sep=`,
+    Time.s   = `...2`
+  )
+
+Metadata.df <- Metadata.df %>%
+filter(timestep != "TimeStamp")
+
+Metadata.df <- Metadata.df %>%
+mutate(timestep = sub("TimeStamp ", "", timestep))
+
+Metadata.df <- Metadata.df %>%
+mutate(timestep = as.numeric(timestep))
+
+
+Metadata.df <- Metadata.df %>%
+  mutate(filename = sub("ASCTstarv.01.20250813_", "",filename))%>%
+    mutate(filename = sub("_Metadata.csv", "",filename))
+
+Metadata.df <- Metadata.df %>%
+  separate(filename, into = c("Well_coordinate", "Field"), sep = "_", remove = TRUE)
+
+Metadata.df <- Metadata.df %>%
+  select(Well_coordinate,
+         Field,
+         timestep,
+         Time.s)
+
+Metadata.df <- Metadata.df %>%
+mutate(Time.s = as.numeric(Time.s))
+
+# Find the average time in hours per frame per well
+Metadata.df <- Metadata.df %>%
+  ungroup()%>%
+  group_by(Well_coordinate,
+           timestep)%>%
+  mutate(Time.s.mean = mean(Time.s))
+
+Metadata.df <- Metadata.df %>%
+  ungroup()%>%
+  group_by(Well_coordinate,
+           timestep)%>%
+  mutate(Time_Hrs =  Time.s.mean / 3600)
+
+Metadata.df <- Metadata.df %>%
+  ungroup()%>%
+  select(Well_coordinate,
+         timestep,
+         Time_Hrs)
+
+Metadata.df <- Metadata.df %>%
+mutate(timestep = timestep -1)
+
+
+# 
+MOC.growth.df <- MOC.df%>%
+    mutate(filename = sub("OCsimple_MOC_ASCTstarv.01.20250813_", "",filename))%>%
+    mutate(filename = sub(".csv", "",filename))%>%
+  mutate(MOC.Predicted.Class = `Predicted Class`)%>%
+  select(-`Predicted Class`)%>%
+    separate(filename, into = c("Well_coordinate", "Field"), sep = "_", remove = TRUE) %>%
+  mutate(Field = as.integer(sub("p", "", Field)))
+```
+
+
+# Merge datasets
+```{r}
+
+# Rename variable filename for merging
+MOC.df <- MOC.df %>%
+  mutate(filename = sub("OCsimple_MOC_ASCTstarv.01.20250813_", "",filename))%>%
+    mutate(filename = sub(".csv", "",filename))
+
+MOC.df <- MOC.df %>%
+  separate(filename, into = c("Well_coordinate", "Field"), sep = "_", remove = TRUE) %>%
+  mutate(Field = as.integer(sub("p", "", Field)))
+
+
+POC.df <- POC.df %>%
+  mutate(filename = sub("OCsimple_POCbSd_ASCTstarv.01.20250813_", "",filename))%>%
+    mutate(filename = sub(".csv", "",filename))
+
+POC.df <- POC.df %>%
+  separate(filename, into = c("Well_coordinate", "Field"), sep = "_", remove = TRUE) %>%
+  mutate(Field = as.integer(sub("p", "", Field)))
+
+
+# Renameing vairbale Predicted class to make it distinct
+MOC.df <- MOC.df %>%
+mutate(MOC.Predicted.Class = `Predicted Class`)%>%
+  select(-`Predicted Class`)
+
+MOC.df <- MOC.df %>%
+select(-`Mean Intensity`)
+
+POC.df <- POC.df %>%
+mutate(Predicted.Class.POC = `Predicted Class`)%>%
+    select(-`Predicted Class`)
+
+
+
+
+POC.df <- POC.df %>%
+select(-`Mean Intensity`)
+
+
+# Merging datasets
+
+ASCT.df <- left_join(MOC.df,
+                     POC.df)
+
+
+ASCT.df <-ASCT.df %>%
+  drop_na()
+
+rm(MOC.df,
+   POC.df)
+```
+
+# Defining Conditions
+```{r}
+unique(ASCT.df$Well_coordinate)
+
+ASCT.df <- ASCT.df %>%
+  mutate(
+    Conditions = case_when(
+  Well_coordinate %in% paste0(LETTERS[3:7], "3") ~ "PBSgel",     # C3–G3
+      Well_coordinate %in% paste0(LETTERS[3:7], "4") ~ "HI.PBSgel",  # C4–G4
+      Well_coordinate %in% paste0(LETTERS[3:7], "6") ~ "7H9gel",     # C6–G6
+      TRUE ~ NA_character_
+    )
+  )
+
+
+ASCT.df <- ASCT.df %>%
+  select(Well_coordinate,
+         Field,
+         Conditions,
+         timestep,
+         MOC.Predicted.Class,
+         Predicted.Class.POC)
+
+
+
+ASCT.df <- ASCT.df %>%
+left_join(Metadata.df)
+
+
+rm(Metadata.df)
+```
+
+# Growth evaluation
+
+```{r}
+MOC.growth.df <- MOC.growth.df %>%
+  mutate(Size.in.pixels = `Size in pixels`)%>%
+  select(-`Size in pixels`)
+
+```
+
+
+## 5.1 Total area of bacteria and total number of single cell bacteria
+```{r}
+
+
+
+# Total Object Area
+
+psudoGrowth.totObjArea.df <- MOC.growth.df %>%
+  dplyr::ungroup()%>%
+  dplyr::select(#ExpFile,
+                Well_coordinate,
+                timestep,
+                Size.in.pixels,
+                MOC.Predicted.Class)%>%
+  filter(MOC.Predicted.Class != "FC")%>%
+  dplyr::group_by( #ExpFile ,
+                    Well_coordinate     ,
+                         timestep)%>%
+  dplyr::mutate(psudoGrowth_totObjArea = sum(Size.in.pixels))%>%
+  dplyr::ungroup()%>%
+  dplyr::select(-Size.in.pixels,
+                -MOC.Predicted.Class)%>%
+  dplyr::distinct()
+
+# Total Object Number
+
+#--- Total number (N) of SC
+psudoGrowth.totNSC.df <- MOC.growth.df %>%
+  dplyr::select(#ExpFile,
+                Well_coordinate,
+                timestep,
+                MOC.Predicted.Class)%>%
+  dplyr::filter(MOC.Predicted.Class == "SC" )%>%
+  dplyr::mutate(Objects = 1)%>%
+  dplyr::group_by( Well_coordinate,
+                   timestep)%>%
+  dplyr:: mutate(psudoGrowth_nSC = sum(Objects))%>%
+  dplyr::ungroup()%>%
+  dplyr::select(#ExpFile,
+                Well_coordinate,
+                timestep,
+                psudoGrowth_nSC)%>%
+  dplyr::distinct()
+
+
+#--- Total number (N) of SC and VS
+psudoGrowth.totNSCVS.df <- MOC.growth.df %>%
+  dplyr::select(#ExpFile,
+                Well_coordinate,
+                timestep,
+                MOC.Predicted.Class)%>%
+  dplyr::filter(MOC.Predicted.Class == "SC"  | MOC.Predicted.Class == "VS" )%>%
+  dplyr::mutate(Objects = 1)%>%
+  dplyr::group_by( Well_coordinate,
+                   timestep)%>%
+  dplyr:: mutate(psudoGrowth_nSC.VS = sum(Objects))%>%
+  dplyr::ungroup()%>%
+  dplyr::select(#ExpFile,
+                Well_coordinate,
+                timestep,
+                psudoGrowth_nSC.VS)%>%
+  dplyr::distinct()
+
+
+
+# Merge and reshape the dataframe 
+
+psudoGrowth.df <- left_join(psudoGrowth.totObjArea.df,
+                  psudoGrowth.totNSC.df)
+
+psudoGrowth.df <- left_join(psudoGrowth.df ,
+                  psudoGrowth.totNSCVS.df)
+
+
+ ASCT.metadata.df <- ASCT.df %>%
+   mutate()
+psudoGrowth.df <- left_join(
+                       psudoGrowth.df,
+                       ASCT.metadata.df)
+
+psudoGrowth.df <- psudoGrowth.df  %>%
+  select(#ExpFile,
+         Well_coordinate,
+         Well_coordinate,
+         timestep,
+         Time_Hrs,
+       psudoGrowth_totObjArea,
+       psudoGrowth_nSC,
+       psudoGrowth_nSC.VS)
+
+#Houskeeping 
+rm(psudoGrowth.totObjArea.df,
+   psudoGrowth.totNSC.df,
+   psudoGrowth.totNSCVS.df)
+```
+
+
+
+
+# Fraction of PI-pos compared to frame 1 for each well
+```{r}
+ASCT.fraction.df <- ASCT.df %>%
+  filter(MOC.Predicted.Class == "SC" | MOC.Predicted.Class == "VS")
+
+
+
+
+
+library(dplyr)
+
+# 1) Get baseline counts at timestep 0 (per well)
+t0_counts <- ASCT.fraction.df %>%
+  group_by(Well_coordinate) %>%
+  filter(timestep == min(timestep)) %>%
+  summarise(
+    piPOS_t0 = sum(Predicted.Class.POC == "piPOS"),
+    piNEG_t0 = sum(Predicted.Class.POC == "piNEG"),
+    total_t0 = n(),
+    .groups = "drop"
+  )
+
+# 2) Get counts per timestep per well
+counts <- ASCT.fraction.df %>%
+  group_by(Well_coordinate, timestep) %>%
+  summarise(
+    piPOS_t    = sum(Predicted.Class.POC == "piPOS"),
+    Time       = first(Time_Hrs),
+    Conditions = first(Conditions),
+    .groups = "drop"
+  )
+
+# 3) Subtract baseline piPOS to get *new deaths* over time
+frac_df <- counts %>%
+  left_join(t0_counts, by = "Well_coordinate") %>%
+  mutate(
+    piPOS_new = pmax(0, piPOS_t - piPOS_t0)  # remove pre-existing dead cells
+  ) %>%
+  arrange(Well_coordinate, timestep) %>%
+  group_by(Well_coordinate) %>%
+  mutate(
+    piPOS_new_running = cummax(piPOS_new),           # enforce non-decreasing
+    frac_piPOS_new    = piPOS_new_running / piNEG_t0 # fraction of initial live cells that died
+  ) %>%
+  ungroup()
+
+
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+
+# --- Summarise per condition & time across wells (piPOS %) ---
+sum_sem_piPOS <- frac_df %>%
+  filter(Conditions != "HI.PBSgel") %>%
+  mutate(frac_piPOS_pct = frac_piPOS_new * 100) %>%   # % dead (baseline-corrected)
+  group_by(Conditions, timestep) %>%
+  summarise(
+    n_wells = n_distinct(Well_coordinate),
+    mean_pct = mean(frac_piPOS_pct, na.rm = TRUE),
+    sem_pct  = sd(frac_piPOS_pct, na.rm = TRUE) / sqrt(n_wells),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ymin = pmax(0, mean_pct - sem_pct),
+    ymax = pmin(100, mean_pct + sem_pct)
+  )
+
+# join with distinct Time values
+conditions.df <- frac_df %>%
+  select(timestep, Time) %>%
+  distinct()
+
+sum_sem_piPOS <- left_join(sum_sem_piPOS, conditions.df, by = "timestep") %>%
+  distinct()
+
+# --- Plot ---
+gg <- ggplot(sum_sem_piPOS, aes(x = Time)) +
+  # SEM ribbon (mean ± SEM)
+  geom_ribbon(aes(ymin = ymin, ymax = ymax, fill = Conditions),
+              alpha = 0.2, colour = NA) +
+  # Mean line + points
+  geom_line(aes(y = mean_pct, colour = Conditions), size = 0.5) +
+  geom_point(aes(y = mean_pct, colour = Conditions), size = 1) +
+  
+  # Colour choices
+  scale_color_manual(values = c("PBSgel" = "steelblue",
+                                "7H9gel" = "navyblue")) +
+  scale_fill_manual(values = c("PBSgel" = "steelblue",
+                               "7H9gel" = "navyblue")) +
+  
+  # Axes
+  scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0, 100)) +
+  scale_x_continuous(breaks = c(0, 12, 24, 36, 48), limits = c(0, 48)) +
+  
+  # Labels
+  labs(
+    x = "Time (hrs)",
+    y = "Fraction bacteria dead (%)",
+    title = "Dead cell fraction over time (mean ± SEM)",
+    subtitle = "Baseline-corrected vs. initial live cells",
+    color = "Conditions",
+    fill  = "Conditions"
+  ) +
+  
+  # Theme
+  theme_pubr() +
+  theme(
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "white", colour = "white"),
+    aspect.ratio = 1,
+    axis.ticks = element_blank(),
+    axis.title = element_text(size = 14),
+    axis.text  = element_text(size = 12)
+  )
+
+gg
+
+# Export gg as PDF in info.res.dir
+ggsave(
+  filename = file.path(info.res.dir, "ASCTstarv.01_DeadCellFraction_meanSEM.pdf"),
+  plot     = gg,
+  device   = "pdf",
+  width    = 6,    # adjust width (in inches)
+  height   = 6,    # adjust height (in inches)
+  units    = "in"
+)
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Summarise per condition & time across wells
+sum_sem <- frac_df %>%
+  filter(Conditions != "HI.PBSgel") %>%
+  mutate(frac_piNEG_new = (1 - frac_piPOS_new) * 100) %>%  # % live (baseline-corrected)
+  group_by(Conditions,
+           timestep) %>%
+  summarise(
+    n_wells = n_distinct(Well_coordinate),
+    mean_pct = mean(frac_piNEG_new, na.rm = TRUE),
+    sem_pct  = sd(frac_piNEG_new, na.rm = TRUE) / sqrt(n_wells),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ymin = pmax(0, mean_pct - sem_pct),
+    ymax = pmin(100, mean_pct + sem_pct)
+  )
+
+conditions.df <- frac_df %>%
+  select(Well_coordinate,
+         timestep,
+         Time)%>%
+  ungroup()%>%
+  distinct()
+
+sum_sem <- left_join(sum_sem, conditions.df)
+
+sum_sem <- sum_sem %>%
+  ungroup()%>%
+  select(-Well_coordinate)%>%
+  distinct()
+
+
+gg.ASCT <- ggplot(sum_sem, aes(x = Time)) +
+  # SEM ribbon (mean ± SEM)
+  geom_ribbon(aes(ymin = ymin, ymax = ymax, fill = Conditions),
+              alpha = 0.2, colour = NA) +
+  # Mean line + points
+  geom_line(aes(y = mean_pct, colour = Conditions), size = 0.5) +
+  geom_point(aes(y = mean_pct, colour = Conditions), size = 1) +
+
+  # Match your colour choices
+  scale_color_manual(values = c("PBSgel" = "steelblue",
+                                "7H9gel" = "navyblue")) +
+  scale_fill_manual(values = c("PBSgel" = "steelblue",
+                               "7H9gel" = "navyblue")) +
+
+  # Axes to match style
+  scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0, 100)) +
+  scale_x_continuous(breaks = c(0, 12, 24, 36, 48), limits = c(0, 48)) +
+
+  # Titles/labels to mirror your prior figure
+  labs(
+    x = "Time ",
+    y = "Fraction bacteria alive (%)",
+    title = "Live cell fraction over time (mean ± SEM)",
+    subtitle = "Baseline-corrected vs. initial live cells",
+    color = "Conditions",
+    fill  = "Conditions"
+  ) +
+
+  # Theme to match layout
+  theme_pubr() +
+  theme(
+    legend.position = "bottom",                 # hide legend like your earlier plot
+    strip.background = element_rect(fill = "white", colour = "white"),
+    aspect.ratio = 1,
+    axis.ticks = element_blank(),
+    axis.title = element_text(size = 14),
+    axis.text  = element_text(size = 12)
+  )
+
+gg.ASCT
+
+# Export gg as PDF in info.res.dir
+ggsave(
+  filename = file.path(info.res.dir, "ASCTstarv.01_LiveCellFraction_meanSEM.pdf"),
+  plot     = gg.ASCT,
+  device   = "pdf",
+  width    = 6,    # adjust width (in inches)
+  height   = 6,    # adjust height (in inches)
+  units    = "in"
+)
+```
+```{r}
+#Houskeeping
+rm(t0_counts,
+   psudoGrowth.df,
+   MOC.growth.df,
+   
+   counts,
+   conditions.df)
+```
+
+
+# Load stading incubator data
+```{r}
+
+
+# Set the folder containing your CSV files
+path <- paste(info.wd.dir,
+              "/Data/",
+              "MOC_standingInc/",
+              sep="")
+
+
+# Get list of all csv files in that folder
+files <- list.files(path, pattern = "\\.csv$", full.names = TRUE)
+
+# Read and combine into one data frame, keeping filename
+MOCsi.df <- files %>%
+  lapply(function(file) {
+    read_csv(file,show_col_types = FALSE) %>%
+      mutate(filename = basename(file))   # keep just the filename
+  }) %>%
+  bind_rows()
+
+# Set the folder containing your CSV files
+path <- paste(info.wd.dir,
+              "/Data/",
+              "POC_standingInc/",
+              sep="")
+
+
+# Get list of all csv files in that folder
+files <- list.files(path, pattern = "\\.csv$", full.names = TRUE)
+
+# Read and combine into one data frame, keeping filename
+POCsi.df <- files %>%
+  lapply(function(file) {
+    read_csv(file,show_col_types = FALSE) %>%
+      mutate(filename = basename(file))   # keep just the filename
+  }) %>%
+  bind_rows()
+```
+
+## Defining timepoitns and fields infromaiton
+
+Each frame in this case represents a field. Each timepoint is defined by
+OCsimple_MOC_ASCTstarvstandingD in filename
+A = d0 ; B = 24h ; C = 48h
+
+```{r}
+
+MOCsi.df <- MOCsi.df %>%
+  mutate(Field = timestep)%>%
+  select(-timestep)
+
+MOCsi.df <- MOCsi.df %>%
+  mutate(
+    filename = str_remove_all(
+      filename,
+      "^OCsimple_MOC_ASCTstarvstanding|\\.01\\.20250813|\\.csv$"
+    )
+  )
+
+MOCsi.df <- MOCsi.df %>%
+  separate(filename,
+           into = c("Time",
+                              "Well_coordinate"), sep = "_", remove = TRUE)
+
+MOCsi.df <- MOCsi.df %>%
+  mutate(
+    Time = case_when(
+      Time == "A" ~ 0,
+      Time == "B" ~ 24,
+      Time == "C" ~ 48,
+      Time == "D" ~ 72,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+MOCsi.df <- MOCsi.df %>%
+filter(Time < 72)
+
+MOCsi.df <- MOCsi.df %>%
+  mutate(Predicted.Class.MOC = `Predicted Class` )%>%
+  select(-`Predicted Class`,
+         -`Mean Intensity`)
+```
+
+
+```{r}
+
+POCsi.df <- POCsi.df %>%
+  mutate(Field = timestep)%>%
+  select(-timestep)
+
+POCsi.df <- POCsi.df %>%
+  mutate(
+    filename = str_remove_all(
+      filename,
+      "^OCsimple_POCbSd_ASCTstarvstanding|\\.01\\.20250813|\\.csv$"
+    )
+  )
+
+POCsi.df <- POCsi.df %>%
+  separate(filename,
+           into = c("Time",
+                     "Well_coordinate"), sep = "_", remove = TRUE)
+
+POCsi.df <- POCsi.df %>%
+  mutate(
+    Time = case_when(
+      Time == "A" ~ 0,
+      Time == "B" ~ 24,
+      Time == "C" ~ 48,
+      Time == "D" ~ 72,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+POCsi.df <- POCsi.df %>%
+filter(Time < 72)
+
+POCsi.df <- POCsi.df %>%
+  mutate(Predicted.Class.POC = `Predicted Class` )%>%
+  select(-`Predicted Class`,
+         -`Mean Intensity`)
+
+
+```
+## merging datframes
+```{r}
+ASCT.standing.df <- left_join(MOCsi.df,
+                              POCsi.df)
+
+
+```
+
+# Defining conditions
+```{r}
+
+library(readxl)
+
+Standing.conditions.df <- read_excel("Conditions_ASCTstandingInc.xlsx")
+
+Standing.conditions.df <- Standing.conditions.df %>%
+ pivot_longer(
+    cols = -Row,                 # melt columns "1"..."12"
+    names_to = "Col",
+    values_to = "Condition",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(
+    Col  = as.integer(Col),      # make column numeric (optional)
+    Well = paste0(Row, Col)      # A1, B3, etc.
+  ) %>%
+  select(Well, Row, Col, Condition) %>%
+  arrange(Row, Col)
+
+
+Standing.conditions.df <- Standing.conditions.df %>%
+  mutate(Well_coordinate = Well)%>%
+  mutate(
+    Conditions = case_when(
+      Condition == "1-PBS-SCS"     ~ "PBS",
+      Condition == "2-7H9-SCS"     ~ "7H9",
+      Condition == "3-PBS-HI.SCS"  ~ "HI.PBS",
+      TRUE ~ Condition
+    )
+  )%>%
+  select(Well_coordinate,
+         Conditions)
+  
+  
+ASCT.standing.df <- left_join(ASCT.standing.df,
+                              Standing.conditions.df)
+
+ASCT.standing.df <- ASCT.standing.df %>%
+  mutate(Field = Field + 1)
+
+ASCT.standing.df <- ASCT.standing.df %>%
+ filter(Predicted.Class.MOC == "SC" | Predicted.Class.MOC == "VS"  )
+  #filter(Predicted.Class.MOC == "SC" | Predicted.Class.MOC == "VS" | Predicted.Class.MOC == "OFFC" | Predicted.Class.MOC == "C2"  )
+```
+
+# Calculate fractions of cells alive  standing incubator sample
+
+
+
+```{r}
+library(dplyr)
+
+# 0) Per-well counts and raw fraction alive
+counts_standing <- ASCT.standing.df %>%
+  group_by(Conditions, Time, Well_coordinate) %>%
+  summarise(
+    piPOS_t = sum(Predicted.Class.POC == "piPOS"),
+    piNEG_t = sum(Predicted.Class.POC == "piNEG"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    frac_alive = ifelse((piPOS_t + piNEG_t) > 0,
+                        piNEG_t / (piNEG_t + piPOS_t), NA_real_)
+  )
+
+# 1) Condition-level T0 baseline (mean fraction alive at T0)
+t0_baseline <- counts_standing %>%
+  filter(Time == 0) %>%
+  group_by(Conditions) %>%
+  summarise(
+    n_wells_t0   = n_distinct(Well_coordinate),
+    t0_mean_frac = mean(frac_alive, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 1) Condition-level T0 baseline (mean fraction alive at T0)
+t0_baseline <- counts_standing %>%
+  filter(Time == 0) %>%
+  group_by(Conditions) %>%
+  summarise(
+    t0_mean_frac = mean(frac_alive, na.rm = TRUE),  # e.g. 0.98
+    .groups = "drop"
+  )
+
+# 2) Normalize so T0 = 100% on average
+normalized <- counts_standing %>%
+  left_join(t0_baseline, by = "Conditions") %>%
+  mutate(
+    norm_pct_alive = ifelse(!is.na(t0_mean_frac) & t0_mean_frac > 0,
+                            (frac_alive / t0_mean_frac) * 100, NA_real_)
+  )
+
+# 3) Summarise mean ± SEM
+frac_summary_norm <- normalized %>%
+  group_by(Conditions, Time) %>%
+  summarise(
+    n_replicates   = n_distinct(Well_coordinate),
+    mean_pct_alive = mean(norm_pct_alive, na.rm = TRUE),
+    sem_pct_alive  = sd(norm_pct_alive,   na.rm = TRUE) / sqrt(n_replicates),
+    .groups = "drop"
+  )
+
+
+frac_summary_norm <- frac_summary_norm %>%
+  filter(Conditions == "PBS")%>%
+  filter(Time != 24)
+
+
+```
+
+
+# Plot
+
+
+
+
+
+```{r}
+gg.ASCT <- ggplot(sum_sem, aes(x = Time)) +
+  # SEM ribbons for gel conditions
+  geom_ribbon(
+    aes(ymin = ymin, ymax = ymax, fill = Conditions),
+    alpha = 0.2, colour = NA
+  ) +
+  # Mean lines for gel conditions
+  geom_line(aes(y = mean_pct, colour = Conditions), size = 0.5) +
+  geom_point(aes(y = mean_pct, colour = Conditions), size = 1) +
+
+  # SEM ribbon for Standing PBS
+  geom_ribbon(
+    data = frac_summary_norm,
+    aes(x = Time,
+        ymin = mean_pct_alive - sem_pct_alive,
+        ymax = mean_pct_alive + sem_pct_alive,
+        fill = "Standing PBS"),
+    inherit.aes = FALSE,
+    alpha = 0.2
+  ) +
+  # Mean line for Standing PBS
+  geom_line(
+    data = frac_summary_norm,
+    aes(x = Time, y = mean_pct_alive, colour = "Standing PBS"),
+    size = 0.5,
+    inherit.aes = FALSE
+  ) +
+  geom_point(data = frac_summary_norm,
+             aes(y =mean_pct_alive,
+                 colour = "Standing PBS"), size = 1) +
+
+  # Unified scales (single legend)
+  scale_color_manual(
+    name   = "Conditions",
+    breaks = c("PBSgel", "7H9gel", "Standing PBS"),
+    values = c("PBSgel" = "steelblue",
+               "7H9gel" = "navyblue",
+               "Standing PBS" = "black")
+  ) +
+  scale_fill_manual(
+    name   = "Conditions",
+    breaks = c("PBSgel", "7H9gel", "Standing PBS"),
+    values = c("PBSgel" = "steelblue",
+               "7H9gel" = "navyblue",
+               "Standing PBS" = "black")
+  ) +
+
+  # Axes
+  scale_y_continuous(
+    breaks = seq(0, 100, 20),
+    limits = c(0, 105)
+  ) +
+  scale_x_continuous(
+    breaks = c(0, 12, 24, 36, 48),
+    limits = c(0, 48)
+  ) +
+
+  # Labels
+  labs(
+    x = "Time",
+    y = "Fraction bacteria alive (%)",
+    title = "Live cell fraction over time (mean ± SEM)",
+    color = "Conditions",
+    fill  = "Conditions",
+    caption = "Shaded area: Standard Error around Mean (SEM)"
+  ) +
+
+  theme_pubr() +
+  theme(
+    
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "white", colour = "white"),
+    aspect.ratio = 1,
+    axis.ticks = element_blank(),
+    axis.title = element_text(size = 14),
+    axis.text  = element_text(size = 12)
+  )
+
+gg.ASCT
+
+# Export gg as PDF in info.res.dir
+ggsave(
+  filename = file.path(info.res.dir, "ASCTstarv.01_LiveCellFraction_InclStandingInc_meanSEM.pdf"),
+  plot     = gg.ASCT ,
+  device   = "pdf",
+  width    = 8.27,   # A4 width in inches
+  height   = 11.7,  
+  units    = "in"
+)
+
+```
+```{r}
+# from sum_sem: keep 7H9gel + PBSgel, take the max Time per condition, and report it as 48 h
+final_from_sum <- sum_sem %>%
+  filter(Conditions %in% c("7H9gel", "PBSgel")) %>%
+  group_by(Conditions) %>%
+  slice_max(order_by = Time, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    Conditions,
+    Time = 48,
+    mean_pct = mean_pct,   # assuming you meant mean_pct (not mean_pxt)
+    sem_pct  = sem_pct     # assuming you meant sem_pct (not see_pct)
+  )
+
+# from frac_summary_norm: take PBS at 48 h and align column names
+final_from_frac <- frac_summary_norm %>%
+  filter(Conditions == "PBS", Time == 48) %>%
+  transmute(
+    Conditions,
+    Time,
+    mean_pct = mean_pct_alive,
+    sem_pct  = sem_pct_alive
+  )
+
+# combine
+final_results <- bind_rows(final_from_sum, final_from_frac) %>%
+  rename(
+    `Mean fractions of cells alive` = mean_pct,
+    `SEM fractions alive` = sem_pct
+  )
+
+
+# export final_results as CSV
+write.csv(
+  final_results,
+  file = file.path(info.res.dir, "Supp_Table_ASCTstarv.01_LiveCellFraction.csv"),
+  row.names = FALSE
+)
+```
+

@@ -1,0 +1,608 @@
+---
+title: "ASCT_Val3.2_POC"
+output: html_document
+date: "2024-08-02"
+---
+# ================================================================
+# Aim
+# ================================================================
+# Quantify how well ilastik pixel classification matches the
+# curated “ground truth” segmentation using the Jaccard index (IoU).
+
+# Functionality:
+# - Loads IoU results per field, per frame and per ROI from multiple
+#   evaluation directories.
+# - Cleans/standardizes experiment IDs and timesteps.
+# - Summarizes IoU distributions across time (0, 24, 48, 72 h) and
+# - Generates publication-style boxplots/violin plots of IoU values.
+# - Computes N of ROIs + mean/median IoU per timepoint and exports a
+#   formatted text report for the supplement.
+
+
+# 1. Define variables
+```{r}
+
+
+info.wdDir <- getwd()
+info.resDir <- paste(info.wdDir,
+                     "/Results",
+                     sep ="")
+
+#---- Path to IoU per Field per SC VS and OFFC class ----
+  ## Go back one level from the current working directory
+  setwd("..")
+
+  ## Change to the ASCT_nd2_images/ASCT_FL_images directory
+  setwd("Segmentation_Evaluation_PerField")
+  setwd("IoU_Results_SC.VS.OFFC_Jaccard.Index")
+
+  ## Get the current working directory
+  info.IoUDir.PerField.SCVSOFFC <- getwd()
+  
+  setwd(info.IoUDir.PerField.SCVSOFFC )
+  
+  
+
+#---- Path to IoU per Field all segments class ----
+  
+  setwd(info.wdDir)
+  
+  ## Go back one level from the current working directory
+  setwd("..")
+
+  ## Change to the ASCT_nd2_images/ASCT_FL_images directory
+  setwd("Segmentation_Evaluation_PerField")
+  setwd("PC_Jaccard.Index")
+
+  ## Get the current working directory
+  info.IoUDir.PerField.allSeg <- getwd()
+  
+  setwd(info.IoUDir.PerField.allSeg)
+  
+  
+  
+  
+#---- Path to IoU per Field per class per ROI ----
+  
+  setwd(info.wdDir)
+  
+  ## Go back one level from the current working directory
+  setwd("..")
+
+  ## Change to the ASCT_nd2_images/ASCT_FL_images directory
+  setwd("Segmentation_Evaluation_PerField_perFrame_perROI")
+ # setwd("IoU_Results/Results_TO_be_USED")
+  setwd("IoU_Results")
+
+  ## Get the current working directory
+  info.IoUDir.PerField.perROI <- getwd()
+  
+  setwd(  info.IoUDir.PerField.perROI)
+  
+  
+
+```
+
+# 2. load libraries
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+library(stringr)
+
+library(ggExtra)
+library(grid)  # Load the grid package allows you to add text to pages in ggplot
+
+# For classification assement
+library(caret)
+```
+
+# 2. Loading data
+## 2.1 Loading PC evalauation per field per frame all segments
+```{r}
+IoU.perField.allSeg.df <- data.frame()
+
+  setwd(info.IoUDir.PerField.allSeg)
+  # List all files in the current directory
+    files <- list.files(info.IoUDir.PerField.allSeg)
+    
+  # Loop through each of the CSV files and read them
+  for (csv_file in files) {
+    
+    # Read the CSV file
+    IoU.perField.allSeg.df.sub <- read.csv(csv_file)
+    IoU.perField.allSeg.df.sub <- IoU.perField.allSeg.df.sub %>%
+       mutate(timestep = X)%>%
+       mutate(ExpID = gsub("_perField_allSegements_JaccardIndex.csv", "",csv_file))%>%
+       select(ExpID,
+              timestep,
+              Jaccard_Index)
+    
+  # Combine the data from the CSV file with the main data frame
+  IoU.perField.allSeg.df <- rbind(IoU.perField.allSeg.df, IoU.perField.allSeg.df.sub)
+  
+  rm(IoU.perField.allSeg.df.sub)
+  
+  }
+
+#Houskeeping
+    rm(csv_file,
+       csv_files)
+
+```
+
+## 2.2 Loading SC VS OFFC
+```{r}
+IoU.perField.SC.VS.OFFC.df <- data.frame()
+
+  setwd(info.IoUDir.PerField.SCVSOFFC)
+  # List all files in the current directory
+    files <- list.files(info.IoUDir.PerField.SCVSOFFC)
+    
+    
+  # Loop through each of the CSV files and read them
+  for (csv_file in files) {
+    
+      setwd(info.IoUDir.PerField.SCVSOFFC)
+    
+    # Read the CSV file
+    IoU.perField.SC.VS.OFFC.df.sub <- read.csv(csv_file)
+    
+    
+    IoU.perField.SC.VS.OFFC.df.sub <- IoU.perField.SC.VS.OFFC.df.sub %>%
+       mutate(timestep = X)%>%
+       mutate(ExpID = gsub("_BFgt_one_hot_MERGED.tif_perField_allSegements_JaccardIndex.csv", "",csv_file))%>%
+             mutate(ExpID = gsub("MOC-", "",ExpID))%>%
+
+       select(ExpID,
+              timestep,
+              Jaccard_Index)
+    
+  # Combine the data from the CSV file with the main data frame
+  IoU.perField.SC.VS.OFFC.df <- rbind(IoU.perField.SC.VS.OFFC.df,
+                                      IoU.perField.SC.VS.OFFC.df.sub)
+  
+  rm(IoU.perField.SC.VS.OFFC.df.sub)
+  
+  }
+
+#Houskeeping
+    rm(csv_file,
+       csv_files)
+
+```
+
+
+
+## 2.2 Loading ROIs IoUs
+```{r}
+IoU.perField.perROI.df <- data.frame()
+
+  setwd(info.IoUDir.PerField.perROI)
+  # List all files in the current directory
+    files <- list.files(info.IoUDir.PerField.perROI)
+    
+           files <- files[grep("_JaccardIndex.csv$", files)]
+
+  # Loop through each of the CSV files and read them
+  for (csv_file in files) {
+    
+      setwd(info.IoUDir.PerField.perROI)
+    
+    # Read the CSV file
+    IoU.perField.perROI.df.sub <- read.csv(csv_file)
+    
+    
+    IoU.perField.perROI.df.sub <- IoU.perField.perROI.df.sub %>%
+      filter(Area == 0)%>%
+      select(Jaccard_Index)%>%
+      mutate(ROI = 1)%>%
+      mutate(ROI = cumsum(ROI))%>%
+      select(ROI,
+             Jaccard_Index)%>%
+       mutate(ExpID = gsub("MOC-0_24_48_72h_", "",csv_file),
+              ExpID = gsub("_BF_one_hot_MERGED__", "",ExpID),
+              ExpID = gsub("_BF_one_hot_MERGED_", "",ExpID),
+              
+              ExpID = gsub("_JaccardIndex.csv", "",ExpID))%>%
+  mutate(timestep = str_extract(ExpID, "(?<=frame_)\\d+"),
+                  ExpID= str_extract(ExpID, ".*(?=frame)")) %>% # Keep everything before "frame"
+
+       select(ExpID,
+              timestep,
+              ROI,
+              Jaccard_Index)
+    
+  # Combine the data from the CSV file with the main data frame
+  IoU.perField.perROI.df <- rbind(IoU.perField.perROI.df,
+                                      IoU.perField.perROI.df.sub)
+  
+  rm(IoU.perField.perROI.df.sub)
+  
+  }
+
+#Houskeeping
+    rm(csv_file,
+       files)
+
+```
+
+# 3. Plot
+## 3.1 All segments per field per frame
+```{r}
+# Create an integrated plot with both boxplot and density plot for Jaccard_Index
+IoU.perField.allSeg.df.plot <- IoU.perField.allSeg.df%>%
+  ggplot(aes(x = Jaccard_Index)) +
+  geom_boxplot(aes(y = 18), fill = "black", alpha = 0.5, outlier.shape = NA) + # Boxplot without outliers
+  geom_jitter(aes(y = 18), width = 0.1, color = "black", alpha = 0.2,shape = 20 , size = 1) + # Jittered points inside the boxplot
+  geom_density(aes(y = ..density..), fill = "black", alpha = 0.5) + # Density plot
+  theme_prism(base_line_size = 8/14) +
+  scale_x_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, by = 0.1)) + # Set x-axis from 0 to 1 with 0.1 intervals
+  theme(   aspect.ratio = 1)+
+  labs(title = "Jaccard Index per Field per Frame (all segments)",
+       x = "IoU",
+       y = "Frequency")
+
+# Save the plot as a PDF
+ggsave(paste(info.resDir ,"/Jaccard_Index_perField_allSeg_Plot.pdf",sep=""), plot = IoU.perField.allSeg.df.plot  , width = 8, height = 6, device = "pdf")
+
+```
+
+## 3.2 SC VS OFFC segments per field per frame
+```{r}
+# Create an integrated plot with both boxplot and density plot for Jaccard_Index
+IoU.perField.SC.VS.OFFC.df.plot <- IoU.perField.SC.VS.OFFC.df%>%
+  ggplot(aes(x = Jaccard_Index)) +
+  geom_boxplot(aes(y = 18), fill = "black", alpha = 0.5, outlier.shape = NA) + # Boxplot without outliers
+  geom_jitter(aes(y = 18), width = 0.1, color = "black", alpha = 0.2,shape = 20 , size = 1) + # Jittered points inside the boxplot
+  geom_density(aes(y = ..density..), fill = "black", alpha = 0.5) + # Density plot
+  theme_prism(base_line_size = 8/14) +
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.1)) + # Set x-axis from 0 to 1 with 0.1 intervals
+  labs(title = "Jaccard Index per Field per Frame (SC VS OFFC segments)",
+       x = "IoU",
+       y = "Frequency")
+# Save the plot as a PDF
+ggsave(paste(info.resDir ,"/Jaccard_Index_perField_sc.vs.offc_Plot.pdf",sep=""), plot = IoU.perField.SC.VS.OFFC.df.plot   , width = 8, height = 6, device = "pdf")
+
+```
+
+
+## 3.2 ROI per Frame per Field
+
+```{r}
+# Create an integrated plot with both boxplot and density plot for Jaccard_Index
+IoU.perField.perROI.df.plot <- IoU.perField.perROI.df%>%
+  filter(Jaccard_Index != 0)%>%
+  ggplot(aes(x = Jaccard_Index,
+             fill = ExpID)) +
+  geom_boxplot(aes(y = 18), alpha = 0.5, outlier.shape = NA) + # Boxplot without outliers
+  geom_jitter(aes(y = 18), width = 0.1, color = "black", alpha = 0.2,shape = 20 , size = 1) + # Jittered points inside the boxplot
+  geom_density(aes(y = ..density..), fill = "black", alpha = 0.5) + # Density plot
+  theme_prism(base_line_size = 8/14) +
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.1)) + # Set x-axis from 0 to 1 with 0.1 intervals
+  labs(title = "Jaccard Index per Field per Frame ROI",
+       x = "IoU",
+       y = "Frequency")
+# Save the plot as a PDF
+ggsave(paste(info.resDir ,"/Jaccard_Index_perField_perFrame_ROI_Plot.pdf",sep=""), plot = IoU.perField.perROI.df.plot   , width = 8, height = 6, device = "pdf")
+
+```
+
+
+### 3.2 ROI per Frame per Field lab meeting
+
+```{r}
+# Load necessary libraries
+#install.packages("paletteer")
+
+library(paletteer) # To use the color palette
+
+# Create an integrated plot with both boxplot and density plot for Jaccard_Index
+IoU.perField.perROI.df.LabMeeting.plot <- IoU.perField.perROI.df %>%
+  filter(Jaccard_Index != 0) %>%
+  ggplot(aes(x = Jaccard_Index)) +
+  
+  # Boxplot without outliers
+  geom_boxplot(aes(y = 18), alpha = 0.5, outlier.shape = NA) +
+  
+  # Jittered points inside the boxplot, colored by timestep
+  geom_jitter(aes(y = 18, 
+                  fill = as.factor(timestep)), 
+              width = 0.1,
+              color = "black", 
+              alpha = 0.7,
+              shape = 21, 
+              size = 0.2) +
+  
+  # Density plot
+  geom_density(aes(y = ..density..),
+               fill = "black", 
+               alpha = 0.25) +
+  
+  # Manually define the color palette from colorBlindness::Blue2Orange12Steps, using only 4 colors
+  scale_fill_manual(values = paletteer_d("colorBlindness::Blue2Orange12Steps")[c(1, 4, 8, 12)]) +
+  
+  # Customize axis and labels
+  theme_prism(base_line_size = 8/14) +
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.1)) + # Set x-axis from 0 to 1 with 0.1 intervals
+  
+  # Titles and labels
+  labs(title = "Jaccard Index per Field per Frame ROI",
+       x = "IoU",
+       y = "Frequency",
+       fill = "Timestep")
+
+IoU.perField.perROI.df.LabMeeting.plot
+```
+
+
+```{r}
+# Save the plot as a PDF
+ggsave(paste(info.resDir ,"/Jaccard_Index_perField_perFrame_ROI_Plot.pdf",sep=""), plot = IoU.perField.perROI.df.plot   , width = 8, height = 6, device = "pdf")
+
+```
+
+
+```{r}
+ROI.facet.AllData.df <- IoU.perField.perROI.df %>%
+  mutate(Data = "0-72h")%>%
+  select(-timestep)
+
+
+ROI.facet.0hData.df <- IoU.perField.perROI.df %>%
+  filter(timestep == "1")%>%
+  mutate(Data = "0h")%>%
+  select(-timestep)
+
+
+
+ROI.facet.24hData.df <- IoU.perField.perROI.df %>%
+  filter(timestep == "2")%>%
+  mutate(Data = "24h")%>%
+  select(-timestep)
+
+
+
+
+ROI.facet.48hData.df <- IoU.perField.perROI.df %>%
+  filter(timestep == "3")%>%
+  mutate(Data = "48h")%>%
+  select(-timestep)
+
+ROI.facet.72hData.df <- IoU.perField.perROI.df %>%
+  filter(timestep == "4")%>%
+  mutate(Data = "72h")%>%
+  select(-timestep)
+
+
+ROI.facet.AllData.df <- rbind(ROI.facet.AllData.df,
+                              ROI.facet.0hData.df)
+
+ROI.facet.AllData.df <- rbind(ROI.facet.AllData.df,
+                              ROI.facet.24hData.df)
+
+
+ROI.facet.AllData.df <- rbind(ROI.facet.AllData.df,
+                              ROI.facet.48hData.df)
+
+ROI.facet.AllData.df <- rbind(ROI.facet.AllData.df,
+                              ROI.facet.72hData.df)
+
+rm(ROI.facet.0hData.df,
+   ROI.facet.24hData.df,
+   ROI.facet.48hData.df,
+   ROI.facet.72hData.df)
+```
+
+
+
+```{r}
+# Ensure 'Data' is a factor with the desired levels
+ROI.facet.AllData.df.PLOT  <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0) %>%
+  mutate(Data = factor(Data, levels = c("0h", "24h", "48h", "72h", "0-72h")))
+
+# Create the violin plot with specific colors for each Data category
+ROI.facet.AllData.df.PLOT <-ggplot(ROI.facet.AllData.df.PLOT, 
+                                   aes(x = Data,
+                                       y = Jaccard_Index)) +
+  
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "black", alpha = 0.2) +
+
+  # Violin plots with specific colors
+  geom_violin(aes(fill = Data), alpha = 0.7) +
+  
+  # Add boxplot inside the violin plot with light grey color
+  geom_boxplot(width = 0.05, fill = "lightgrey", outlier.shape = NA, alpha = 0.8) +
+  
+  # Set y-axis limits from 0 to 1 with breaks at 0.2 intervals
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+  
+  # Manually set violin plot colors for each Data category
+  scale_fill_manual(values = c("0h" = "#CCFFFF",
+                               "24h" = "#99FFFF",
+                               "48h" = "#66E5FF",
+                               "72h" = "#0099CC",
+                               "0-72h" = "black")) +
+  
+  # Customize the plot with labels and themes
+  labs(title = "Violin Plot of Jaccard Index of ROIs",
+       x = "",
+       y = "IoU") +
+  
+  # Modify the theme to remove x-axis ticks and labels
+  theme_prism(base_line_size = 8/14) +
+  theme(axis.text.x = element_blank(),   # Remove x-axis text/labels
+        axis.ticks.x = element_blank())  # Remove x-axis ticks
+
+
+# Save the plot as a PDF
+ggsave(paste(info.resDir ,"/Jaccard_Index_perField_perFrame_ROI_Plot.pdf",sep=""),
+       plot = ROI.facet.AllData.df.PLOT   ,
+       width = 8,
+       height = 6,
+       device = "pdf")
+```
+
+# Overall numbers for anaylsis
+```{r}
+
+#-- All data 
+Info.Tot.N.of.ROIs.0.72h <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "0-72h")
+
+Info.Tot.N.of.ROIs.0.72h  <- nrow(Info.Tot.N.of.ROIs.0.72h )
+print(Info.Tot.N.of.ROIs.0.72h)
+
+
+Info.Tot.N.of.ROIs.0.72h.stats <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "0-72h")%>%
+  mutate(Mean.Roi = round(mean(Jaccard_Index), digits = 3),
+         Median.Roi = median(Jaccard_Index))%>%
+  mutate(Stat.mean.median = paste("IoU mean: ", Mean.Roi, " median: ",Median.Roi,sep=""))%>%
+  select(Stat.mean.median)%>%
+  distinct()
+
+#-- 0h data 
+Info.Tot.N.of.ROIs.0h <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "0h")
+
+
+Info.Tot.N.of.ROIs.0h <- nrow(Info.Tot.N.of.ROIs.0h)
+print(Info.Tot.N.of.ROIs.0h)
+
+Info.Tot.N.of.ROIs.0h.stats <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "0h")%>%
+  mutate(Mean.Roi = round(mean(Jaccard_Index), digits = 3),
+         Median.Roi = median(Jaccard_Index))%>%
+  mutate(Stat.mean.median = paste("IoU mean: ", Mean.Roi, " median: ",Median.Roi,sep=""))%>%
+  select(Stat.mean.median)%>%
+  distinct()
+
+
+#-- 24h data 
+Info.Tot.N.of.ROIs.24h <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "24h")
+
+Info.Tot.N.of.ROIs.24h <- nrow(Info.Tot.N.of.ROIs.24h)
+
+print(Info.Tot.N.of.ROIs.24h )
+
+Info.Tot.N.of.ROIs.24h.stats <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "24h")%>%
+  mutate(Mean.Roi = round(mean(Jaccard_Index), digits = 3),
+         Median.Roi = median(Jaccard_Index))%>%
+  mutate(Stat.mean.median = paste("IoU mean: ", Mean.Roi, " median: ",Median.Roi,sep=""))%>%
+  select(Stat.mean.median)%>%
+  distinct()
+
+
+#-- 48h data 
+Info.Tot.N.of.ROIs.48h <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "48h")
+
+Info.Tot.N.of.ROIs.48h <-nrow(Info.Tot.N.of.ROIs.48h )
+
+Info.Tot.N.of.ROIs.48h.stats <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "48h")%>%
+  mutate(Mean.Roi = round(mean(Jaccard_Index), digits = 3),
+         Median.Roi = median(Jaccard_Index))%>%
+  mutate(Stat.mean.median = paste("IoU mean: ", Mean.Roi, " median: ",Median.Roi,sep=""))%>%
+  select(Stat.mean.median)%>%
+  distinct()
+
+
+#-- 72h data 
+Info.Tot.N.of.ROIs.72h <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "72h")
+
+
+Info.Tot.N.of.ROIs.72h <- nrow(Info.Tot.N.of.ROIs.72h)
+
+Info.Tot.N.of.ROIs.72h.stats <- ROI.facet.AllData.df %>%
+  filter(Jaccard_Index != 0)%>%
+  filter(Data == "72h")%>%
+  mutate(Mean.Roi = round(mean(Jaccard_Index), digits = 3),
+         Median.Roi = median(Jaccard_Index))%>%
+  mutate(Stat.mean.median = paste("IoU mean: ", Mean.Roi, " median: ",Median.Roi,sep=""))%>%
+  select(Stat.mean.median)%>%
+  distinct()
+```
+
+## Export text file with numbers 
+```{r}
+
+# Define additional text
+additional_text <- c(
+  "Figure S1. Antimicrobial Single-Cell Testing (A)",
+  "-------------------------------------",
+  "Figure S1. Antimicrobial Single-Cell Testing.
+(A) Overlay of “ground truth” bacterial segmentation with automated object segmentation (pixel classification) of M. abscessus brightfield images. The Jaccard index quantifies overlay accuracy across imaging frames during time-lapse acquisition.",
+  "-----",
+  "1. Information:",  # Adding a new line
+  "Image data:",
+
+  paste(unique(IoU.perField.perROI.df$ExpID),sep=""),
+  paste("T10 & V10: Amikicin (AMK) treatment"),
+  paste("S20: linezolid (LZD) treatment"),
+  "Eeach image; 4 frames corresponding to: 0, 24, 48 and 72h timepoints",
+  "",
+  "-----",
+  "ROI Jaccard index analysis:",
+  "2. Number of ROIs",
+  paste("At time 0h:", Info.Tot.N.of.ROIs.0h),
+  paste("At time 24h:", Info.Tot.N.of.ROIs.24h),
+  paste("At time 48h:", Info.Tot.N.of.ROIs.48h),
+  paste("At time 72h:", Info.Tot.N.of.ROIs.72h),
+  paste("At time 0-72h:", Info.Tot.N.of.ROIs.0.72h),
+
+  "-----",
+ "3. Mean & median IoU score:",
+  paste("At time 0h:", Info.Tot.N.of.ROIs.0h.stats$Stat.mean.median),
+  paste("At time 24h:", Info.Tot.N.of.ROIs.24h.stats$Stat.mean.median),
+  paste("At time 48h:", Info.Tot.N.of.ROIs.48h.stats$Stat.mean.median),
+  paste("At time 72h:", Info.Tot.N.of.ROIs.72h.stats$Stat.mean.median),
+  paste("At time 0-72h:", Info.Tot.N.of.ROIs.0.72h.stats$Stat.mean.median),
+  "-----"
+
+)
+
+
+# Combine additional text with the confusion matrix output and statistics
+output_text <- c(
+  additional_text)
+
+today <- format(Sys.Date(), "%Y%m%d")
+
+res.txt <- paste(info.resDir,
+                       "/",
+                       "ASCTsupp.Fig1a_Seg.Eval.IoU_",
+                       today ,
+                       ".txt",sep="")
+# Write the combined text to a text file
+writeLines(output_text,res.txt)
+
+
+
+```
+

@@ -1,0 +1,966 @@
+
+# ================================================================
+# Aim
+# ================================================================
+# Assess how antibiotic tolerance (AUCrt0–72h) relates to intrinsic
+# growth properties and resistance (MIC) across all ASCT experiments.
+#
+# This script:
+# - Loads the main ASCT phenotype table (MainPhenotypes_ASCTpaper.csv).
+# - Extracts per–drug tolerance metrics:
+#     AUCrt0–72h / 72 h for 10× and 20× MIC exposures (AMK, FOX, IPM,
+#     MXF, TGC, LZD, MIN, AZM early/late).
+# - Extracts explanatory variables:
+#     • Resistance: log2 MIC per drug (incl. AZMearly / AZMlate),
+#     • Growth: Gompertz growth rate (Rate_mean_Gompertz_sd0.3),
+#     • Lag: Gompertz lag time (Lag_mean_Gompertz_48h.sd5).
+# - Optionally excludes the top 0%, 5% or 10% of isolates with the
+#   highest MICs (per drug) to test whether extreme resistance values
+#   drive MIC–tolerance correlations.
+# - For each drug and exposure (L/H):
+#     • Fits linear models of tolerance vs MIC, growth rate, and lag
+#       time, extracting Pearson R² and p-values.
+#     • Computes Spearman rank correlations and p-values.
+# - Builds compact 3-column correlation panels per drug:
+#     col 1 = tolerance vs MIC,
+#     col 2 = tolerance vs growth rate,
+#     col 3 = tolerance vs lag time.
+#   AZM panels are split into early-/late-MIC correlations.
+# - Annotates each panel with R², Pearson p, Spearman p, n, and the
+#   applied MIC-exclusion criterion.
+# - Exports all panels as a multi-page PDF:
+#     ASCTsupp_Correlation_Tol_v_Growth.Lag.Resistance_Excl.<X>.pdf
+#   for integration into the ASCT tolerance analysis.
+
+
+# Section 1: Defining paths and variables
+```{r setup, include=FALSE}
+
+
+Main.df <- read.csv("/Users/jovanovic/Documents/PhD/Project_Tolerance/Ranalysis/ASCT/ASCT_Figures/ASCT_Main_Data/MainPhenotypes_ASCTpaper.csv")
+
+
+  
+genDir <- getwd() 
+
+resDir <- paste(genDir,
+                "/Result_Fig",
+                sep="")
+
+# Excluding criteria: 10% or 5% of the highest MICs to determine whether correlation between MIC and tolerance is driven by extrme values (particularly in FoxH/L)
+# Can either be 0%, 5% or 10% 
+Excluding.Criteria <- ("0%")
+
+
+
+# Convert Excluding.Criteria to numeric for comparison
+exclusion_percent <- as.numeric(sub("%", "", Excluding.Criteria)) / 100
+
+
+```
+
+# Section 2: Loading libraries
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(reshape2)
+library(scales)
+library(ggprism)
+
+library(stringr)
+
+library(ggExtra)
+
+
+library(grid)  # Load the grid package allows you to add text to pages in ggplot
+
+
+
+```
+
+
+```{r}
+names(Main.df)
+```
+
+
+# Section 3: Assess the correlation of between tolerance vs growth, lag and MICs
+
+## Defining list of variables
+```{r}
+
+y.variables.Tol <- c("AMK.10x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.13.20230705",
+"AMK.20x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.08.20230504" ,
+ "LZD.10x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.19.20230804" ,
+ "LZD.20x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.09.20230508" ,
+ "MIN.10x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.20.20230808" ,
+ "MIN.20x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.14.20230712" ,
+"TGC.10x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.16.20230719" ,
+ "TGC.20x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.07.20230427" ,
+ "AZM.10x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.18.20230728" ,
+"AZM.20x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.22.20230814" ,
+ "FOX.10x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.06.20230420" ,
+ "FOX.20x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.03.20230405" ,
+"IPM.10x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.05.20230413" ,
+"IPMc.20x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.23.20230823",
+"MXF.20x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.04.20230409" ,
+"MXFb.10x_AUCrt0.72h_MD.3sd_Growth.Q1Q2_Trkv2.Ila2BaSic_ASCT.24.20231025"
+
+)
+
+
+
+
+
+x.variables.MIC <- c( 
+  "AMK_MIC_lg2" ,                                                           
+ "IPM_MIC_lg2",                                                           
+"MXF_MIC_lg2",                                                         
+"FOX_MIC_lg2",
+"LZD_MIC_lg2",                                                       
+ "TGC_MIC_lg2",                                                       
+"AZMearly_MIC_lg2",                                                     
+"AZMlate_MIC_lg2",                                                    
+"MIN_MIC_lg2")
+
+
+x.variables.GrowthRate <- c("Rate_mean_Gompertz_sd0.3")
+x.variables.LagTime<-c("Lag_mean_Gompertz_48h.sd5")
+
+
+```
+
+## Looping through plot
+```{r}
+list.of.ggplot <- list()
+tol.metric <- y.variables.Tol[9]
+
+
+for ( tol.metric in y.variables.Tol) {
+  
+
+# Extract everything before "_AUCrt"
+abx.H.or.L <- str_extract(tol.metric, "^[^_]+(?=_AUCrt)")
+
+# Replace .10x with superscript "L" and .20x with superscript "H"
+abx.H.or.L  <- str_replace_all(abx.H.or.L , c("\\.10x" = "^L",
+                                              "\\.20x" = "^H"))
+  abx.H.or.L  <- sub("c", "",   abx.H.or.L)
+    abx.H.or.L  <- sub("b", "",   abx.H.or.L)
+
+
+drug <- str_extract(tol.metric, "^[^_]+(?=_AUCrt)")
+drug <-  str_replace_all(drug , c("\\.10x" = "",
+                                  "\\.20x" = ""))
+
+drug <-  sub("c", "", drug)
+drug <-  sub("b", "", drug)
+
+
+
+mic.metric <- x.variables.MIC[str_detect(x.variables.MIC, drug)]
+
+# MIC 
+# if its AZM then we have to do both late and early correlation
+## Need to edit
+if (drug == "AZM" ) {
+  
+  mic.early <-  mic.metric [str_detect(mic.metric ,"early")]
+  
+  mic.late <-  mic.metric [str_detect(mic.metric ,"late")]
+  
+  
+  
+   ggMICmodel.AZMearly <- Main.df %>%
+  select(all_of(tol.metric), 
+         all_of( mic.early))%>%
+    drop_na()%>%
+    mutate(!!tol.metric :=  ((!!sym(tol.metric) / 72)))
+   
+   
+   # Apply the exclusion logic based on Excluding.Criteria
+if (exclusion_percent == 0.10) {
+   
+# Sort the data from highest to lowest MIC values
+sorted_ggMICmodel.AZMearly <-  ggMICmodel.AZMearly[order( ggMICmodel.AZMearly[[mic.early]], decreasing = TRUE), ]
+
+# Calcuearly the number of rows to remove (10% of total)
+num_to_remove <- ceiling(0.10 * nrow(sorted_ggMICmodel.AZMearly))
+
+# Remove the top 10% of the rows
+ggMICmodel.AZMearly <- sorted_ggMICmodel.AZMearly[-(1:num_to_remove), ]
+
+# Check the resulting dataset
+n_after_sorted <- nrow(ggMICmodel.AZMearly)
+cat("Number of observations remaining after sorting and excluding ", Excluding.Criteria, "of the data:", n_after_sorted)
+
+
+} else if (exclusion_percent == 0.05) {
+   
+# Sort the data from highest to lowest MIC values
+sorted_ggMICmodel.AZMearly <-  ggMICmodel.AZMearly[order( ggMICmodel.AZMearly[[mic.early]], decreasing = TRUE), ]
+
+# Calcuearly the number of rows to remove (10% of total)
+num_to_remove <- ceiling(0.05 * nrow(sorted_ggMICmodel.AZMearly))
+
+# Remove the top 10% of the rows
+ggMICmodel.AZMearly <- sorted_ggMICmodel.AZMearly[-(1:num_to_remove), ]
+
+# Check the resulting dataset
+n_after_sorted <- nrow(ggMICmodel.AZMearly)
+cat("Number of observations remaining after sorting and excluding ", Excluding.Criteria, "of the data:", n_after_sorted)
+
+} else if (exclusion_percent == 0) {
+
+cat("No data is excluded because is", Excluding.Criteria)
+
+}
+   
+   # Create symbols for the columns
+tol_metric_sym <- sym(tol.metric)
+mic_early_sym <- sym(  mic.early)
+  # Compute R^2 using a linear model
+# Create a formula for the lm function
+formula <- as.formula(paste(tol_metric_sym, "~", mic_early_sym))
+
+
+# Pearssons
+# Compute the linear model
+model.AZM.early <- lm(formula, data =  ggMICmodel.AZMearly)
+# Extract R-squared and p-value
+model.AZM.early_summary <- broom::glance(model.AZM.early)
+AZM.early_Rsqrd <- round(model.AZM.early_summary$r.squared,4)
+AZM.early_p_value <- model.AZM.early_summary$p.value
+
+
+# Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+AZM.early_p_value <- ifelse(AZM.early_p_value < 0.001, "< 0.001",
+                    ifelse(AZM.early_p_value < 0.01, round(AZM.early_p_value, 3),
+                           round(AZM.early_p_value, 2)))
+
+
+# ------Spearman correlation;
+# Using this formula spearman_corr <- cor.test(x, y, method = "spearman")
+
+
+AZM.early_spearman_corr <- cor.test(ggMICmodel.AZMearly[[mic_early_sym]] ,ggMICmodel.AZMearly[[tol_metric_sym ]], method = "spearman")
+AZM.early_spearman_p_value <- AZM.early_spearman_corr$p.value
+
+
+# Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+AZM.early_spearman_p_value <- ifelse(AZM.early_spearman_p_value < 0.001, "< 0.001",
+                    ifelse(AZM.early_spearman_p_value< 0.01, round(AZM.early_spearman_p_value, 3),
+                           round(AZM.early_spearman_p_value, 2)))
+
+
+#---
+
+   ggMICmodel.AZMlate <- Main.df %>%
+  select(all_of(tol.metric), 
+         all_of( mic.late))%>%
+    drop_na()%>%
+    mutate(!!tol.metric :=  ((!!sym(tol.metric) / 72)))
+
+
+   # Apply the exclusion logic based on Excluding.Criteria
+if (exclusion_percent == 0.10) {
+  # Exclude the top 10% of dynamically defined mic.metric values
+
+ 
+# Sort the data from highest to lowest MIC values
+sorted_ggMICmodel.AZMlate <-  ggMICmodel.AZMlate[order( ggMICmodel.AZMlate[[mic.late]], decreasing = TRUE), ]
+
+# Calculate the number of rows to remove (10% of total)
+num_to_remove <- ceiling(0.10 * nrow(sorted_ggMICmodel.AZMlate))
+
+# Remove the top 10% of the rows
+ggMICmodel.AZMlate <- sorted_ggMICmodel.AZMlate[-(1:num_to_remove), ]
+
+# Check the resulting dataset
+n_after_sorted <- nrow(ggMICmodel.AZMlate)
+cat("Number of observations remaining after sorting and excluding ", Excluding.Criteria, "of the data:", n_after_sorted)
+
+
+  rm(sorted_ggMICmodel.AZMlate,
+     n_after_sorted,
+     num_to_remove)
+
+ 
+ 
+
+} else if (exclusion_percent == 0.05) {
+  # Exclude the top 5% of dynamically defined mic.metric values
+  
+   
+# Sort the data from highest to lowest MIC values
+sorted_ggMICmodel.AZMlate <-  ggMICmodel.AZMlate[order( ggMICmodel.AZMlate[[mic.late]], decreasing = TRUE), ]
+
+# Calculate the number of rows to remove (10% of total)
+num_to_remove <- ceiling(0.05 * nrow(sorted_ggMICmodel.AZMlate))
+
+# Remove the top 10% of the rows
+ggMICmodel.AZMlate <- sorted_ggMICmodel.AZMlate[-(1:num_to_remove), ]
+
+# Check the resulting dataset
+n_after_sorted <- nrow(ggMICmodel.AZMlate)
+cat("Number of observations remaining after sorting and excluding ", Excluding.Criteria, "of the data:", n_after_sorted)
+
+  
+}else if (exclusion_percent == 0) {
+
+cat("No data is excluded because is", Excluding.Criteria)
+
+}
+  
+   
+   # Create symbols for the columns
+tol_metric_sym <- sym(tol.metric)
+mic_late_sym <- sym(  mic.late)
+  # Compute R^2 using a linear model
+# Create a formula for the lm function
+formula <- as.formula(paste(tol_metric_sym, "~", mic_late_sym))
+
+# Compute the linear model
+model.AZM.late <- lm(formula, data =  ggMICmodel.AZMlate)
+# Extract R-squared and p-value
+model.AZM.late_summary <- broom::glance(model.AZM.late)
+AZM.late_Rsqrd <- round(model.AZM.late_summary$r.squared,4)
+AZM.late_p_value <- model.AZM.late_summary$p.value
+
+
+# Apply the formatting rules
+# Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+AZM.late_p_value <- ifelse(AZM.late_p_value < 0.001, "< 0.001",
+                    ifelse(AZM.late_p_value < 0.01, round(AZM.late_p_value, 3),
+                           round(AZM.late_p_value, 2)))
+
+
+
+# Spearmans correlation 
+AZM.late_spearman_corr <- cor.test(ggMICmodel.AZMlate[[mic_late_sym]] ,ggMICmodel.AZMlate[[tol_metric_sym ]], method = "spearman")
+AZM.late_spearman_p_value <- AZM.late_spearman_corr$p.value
+
+
+# Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+AZM.late_spearman_p_value <- ifelse(AZM.late_spearman_p_value < 0.001, "< 0.001",
+                    ifelse(AZM.late_spearman_p_value< 0.01, round(AZM.late_spearman_p_value, 3),
+                           round(AZM.late_spearman_p_value, 2)))
+
+
+#----
+# Conditional limits and breaks based on the drug
+if (drug %in% c("FOX", "IPM")) {
+  y_limits <- c(0, 0.5)
+  y_breaks <- seq(0, 0.5, by = 0.1)
+} else {
+  y_limits <- c(0, 1)
+  y_breaks <- seq(0, 1, by = 0.2)
+}
+
+n.of.MICs.AZMearly<- nrow(ggMICmodel.AZMearly)
+
+  ggMICearly <- ggMICmodel.AZMearly %>%
+  select(all_of(tol.metric), 
+         all_of(mic.early))%>%
+    drop_na()%>%
+
+   mutate(Stats = paste("Rsqr = ",AZM.early_Rsqrd, "\n", 
+                     "p ", AZM.early_p_value, 
+                     sep = ""))%>%
+    
+     mutate(Stats = paste(Stats,"\n",
+                          "Spearman p =" ,AZM.early_spearman_p_value,
+                     sep = ""))%>%
+    mutate(Stats = paste(Stats,
+                            " (n ",
+                         n.of.MICs.AZMearly,
+                         ") ",
+                                                  Excluding.Criteria,
+
+                         sep=""))%>%
+  
+  ggplot(aes(x = !!sym(mic.early), y = !!sym(tol.metric))) +
+      theme_prism(base_line_size =8/14,                   base_fontface = "plain")+
+  geom_point(stroke = 0,size = 0.5,alpha = 0.75) +
+    labs(x = expression("MIC early"),
+            y =  parse(text = abx.H.or.L)) +
+  geom_smooth(method = "lm", 
+              se = FALSE,
+              color = "blue",
+              size = 0.25) +  # Linear regression line
+     scale_y_continuous(limits = y_limits, breaks = y_breaks) +
+    #scale_x_continuous(limits = c(-4, 10), breaks = seq(-4, 10, by = 2)) +  # Set y-axis limits and intervals
+
+    theme(  panel.border = element_blank(),
+          legend.position = "none",
+          aspect.ratio = 1,
+                  axis.ticks = element_blank(),  # Remove axis ticks
+    plot.margin = margin(10, 10, 10, 10),  # Set equal margins
+
+          strip.text = element_text(size = 10, face = "plain"),
+          axis.text.x = element_text(size = 7, face = "plain"),
+          axis.text.y = element_text(size = 7),
+            #  axis.text = element_text(size = 4) ,    # Adjust axis text size
+               axis.text = element_blank())+
+    coord_fixed(ratio = 1) + 
+
+  facet_wrap(~Stats)
+   
+  ggMICearly
+
+# Dynamically name the list element according to the value of abx.H.or.L
+list.of.ggplot[[paste(abx.H.or.L, "_MICearly",sep="")]] <-    ggMICearly
+
+n.of.MICs.AZMlate<- nrow(ggMICmodel.AZMlate)
+
+
+  ggMIClate <- ggMICmodel.AZMlate %>%
+  select(all_of(tol.metric), 
+         all_of(mic.late))%>%
+    drop_na()%>%
+    mutate(Stats = paste("Rsqr = ",AZM.late_Rsqrd, "\n", 
+                     "p = ", AZM.late_p_value, 
+                     sep = ""))%>%
+    mutate(Stats = paste(Stats,"\n",
+                          "Spearman p =" ,AZM.late_spearman_p_value,
+                     sep = ""))%>%
+   mutate(Stats = paste(Stats,
+                            " (n ",
+                         n.of.MICs.AZMlate,
+                         ") ",
+                                                 Excluding.Criteria,
+
+                        sep=""))%>%
+  
+  ggplot(aes(x = !!sym(mic.late), y = !!sym(tol.metric))) +
+      theme_prism(base_line_size =8/14,                   base_fontface = "plain")+
+  geom_point(stroke = 0,size = 0.5,alpha = 0.75) +
+    labs(x = expression("MIC late"),
+            y =  parse(text = abx.H.or.L)) +
+  geom_smooth(method = "lm", 
+              se = FALSE,
+              color = "blue",
+              size = 0.25) +  # Linear regression line
+  
+     scale_y_continuous(limits = y_limits, breaks = y_breaks) +
+   # scale_x_continuous(limits = c(-4, 10), breaks = seq(-4, 10, by = 2)) +  # Set y-axis limits and intervals
+
+    theme(  panel.border = element_blank(),
+          legend.position = "none",
+          aspect.ratio = 1,
+                            axis.ticks = element_blank(),  # Remove axis ticks
+    plot.margin = margin(10, 10, 10, 10),  # Set equal margins
+
+          strip.text = element_text(size = 10, face = "plain"),
+          axis.text.x = element_text(size = 7, face = "plain"),
+          axis.text.y = element_text(size = 7),
+            #  axis.text = element_text(size = 4) ,    # Adjust axis text size
+               axis.text = element_blank())+
+      coord_fixed(ratio = 1) + 
+
+    facet_wrap(~Stats)
+  
+  
+  ggMIClate
+
+# Dynamically name the list element according to the value of abx.H.or.L
+list.of.ggplot[[paste(abx.H.or.L, "_MIClate",sep="")]] <-  ggMIClate
+
+
+
+
+}
+
+else{  # MICs 
+  
+  ggMICmodel <- Main.df %>%
+  select(all_of(tol.metric), 
+         all_of(mic.metric))%>%
+    drop_na()%>%
+    mutate(!!tol.metric :=  ((!!sym(tol.metric) / 72)))
+   
+# Apply the exclusion logic based on Excluding.Criteria
+if (exclusion_percent == 0.10) {
+  
+  
+# Sort the data from highest to lowest MIC values
+sorted_ggMICmodel <- ggMICmodel[order(ggMICmodel[[mic.metric]], decreasing = TRUE), ]
+
+# Calculate the number of rows to remove (10% of total)
+num_to_remove <- ceiling(0.10 * nrow(sorted_ggMICmodel))
+
+# Remove the top 10% of the rows
+  ggMICmodel <- sorted_ggMICmodel[-(1:num_to_remove), ]
+
+# Check the resulting dataset
+n_after_sorted <- nrow(  ggMICmodel)
+cat("Number of observations remaining after sorting and excluding ", Excluding.Criteria, "of the data:", n_after_sorted)
+
+
+  rm(sorted_ggMICmodel,
+     n_after_sorted,
+     num_to_remove)
+
+} else if (exclusion_percent == 0.05) {
+  
+# Sort the data from highest to lowest MIC values
+sorted_ggMICmodel <- ggMICmodel[order(ggMICmodel[[mic.metric]], decreasing = TRUE), ]
+
+# Calculate the number of rows to remove (10% of total)
+num_to_remove <- ceiling(0.05 * nrow(sorted_ggMICmodel))
+
+# Remove the top 10% of the rows
+  ggMICmodel <- sorted_ggMICmodel[-(1:num_to_remove), ]
+
+# Check the resulting dataset
+n_after_sorted <- nrow(  ggMICmodel)
+cat("Number of observations remaining after sorting and excluding ", Excluding.Criteria, "of the data:", n_after_sorted)
+
+
+  rm(sorted_ggMICmodel,
+     n_after_sorted,
+     num_to_remove)
+
+}else if (exclusion_percent == 0) {
+
+cat("No data is excluded because is", Excluding.Criteria)
+
+}
+
+   
+   # Create symbols for the columns
+tol_metric_sym <- sym(tol.metric)
+mic_early_sym <- sym(mic.metric)
+  # Compute R^2 using a linear model
+# Create a formula for the lm function
+formula <- as.formula(paste(tol_metric_sym, "~", mic_early_sym))
+
+# Compute the linear model
+model <- lm(formula, data = ggMICmodel)
+# Extract R-squared and p-value
+model_summary <- broom::glance(model)
+Rsqrd <- round(model_summary$r.squared,4)
+p_value <- model_summary$p.value
+
+
+# Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+p_value <- ifelse(p_value < 0.001, " < 0.001",
+                    ifelse(p_value < 0.01, paste(" = ",
+                                                 round(p_value, 3),sep=""),
+                           paste(" = ",round(p_value, 2),sep="")))
+
+
+
+# ------Spearman correlation;
+# Using this formula spearman_corr <- cor.test(x, y, method = "spearman")
+
+
+spearman_corr <- cor.test(ggMICmodel[[mic_early_sym]] ,ggMICmodel[[tol_metric_sym ]], method = "spearman")
+spearman_p_value <- spearman_corr$p.value
+
+
+# Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+spearman_p_value <- ifelse(spearman_p_value < 0.001, "< 0.001",
+                    ifelse(spearman_p_value< 0.01, round(spearman_p_value, 3),
+                           round(spearman_p_value, 2)))
+# -----
+
+# Conditional limits and breaks based on the drug
+if (drug %in% c("FOX", "IPM")) {
+  y_limits <- c(0, 0.5)
+  y_breaks <- seq(0, 0.5, by = 0.1)
+} else {
+  y_limits <- c(0, 1)
+  y_breaks <- seq(0, 1, by = 0.2)
+}
+
+
+n.of.MICs<- nrow(ggMICmodel)
+
+
+ ggMIC <- ggMICmodel %>%
+  select(all_of(tol.metric), 
+         all_of(mic.metric))%>%
+    drop_na()%>%
+ mutate(Stats = paste("Rsqr = ", Rsqrd, "\n", 
+                     "Pearsons p", p_value, 
+                     sep = ""))%>%
+     mutate(Stats = paste(Stats,"\n",
+                          "Spearman p =" ,spearman_p_value,
+                     sep = ""))%>%
+     mutate(Stats = paste(Stats,
+                         " (n ",
+                         n.of.MICs,
+                         ") ",
+                         Excluding.Criteria,
+                         sep=""))%>%
+  
+  ggplot(aes(x = !!sym(mic.metric), y = !!sym(tol.metric))) +
+      theme_prism(base_line_size =8/14,                   base_fontface = "plain")+
+  geom_point(stroke = 0,size = 0.5,alpha = 0.75) +
+    labs(x = expression(""),
+            y =  parse(text = abx.H.or.L),
+             title = if (abx.H.or.L == "AMK^L") "MIC" else NULL  # Conditional title
+
+         ) +
+  geom_smooth(method = "lm", 
+              se = FALSE,
+              color = "blue",
+              size = 0.25) +  
+   
+   
+     scale_y_continuous(limits = y_limits, breaks = y_breaks) +
+  #  scale_x_continuous(limits = c(-4, 10), breaks = seq(-4, 10, by = 2)) +  # Set y-axis limits and intervals
+
+    theme(  panel.border = element_blank(),
+                plot.margin = margin(10, 10, 10, 10),  # Set equal margins
+
+          legend.position = "none",
+          aspect.ratio = 1,
+          axis.ticks = element_blank(),  # Remove axis ticks
+          strip.text = element_text(size = 10, face = "plain"),
+          axis.text.x = element_text(size = 7, face = "plain"),
+          axis.text.y = element_text(size = 7),
+            #  axis.text = element_text(size = 4) ,    # Adjust axis text size
+               axis.text = element_blank())+
+     coord_fixed(ratio = 1) + 
+
+   facet_wrap(~Stats)
+ 
+
+rm(Rsqrd,
+  p_value)
+# Dynamically name the list element according to the value of abx.H.or.L
+list.of.ggplot[[paste(abx.H.or.L, "_MIC",sep="")]] <-  ggMIC
+
+}
+
+
+   ggGrowthmodel <- Main.df %>%
+  select(all_of(tol.metric), 
+         all_of(x.variables.GrowthRate))%>%
+    drop_na()%>%
+    mutate(!!tol.metric :=  ((!!sym(tol.metric) / 72)))
+   
+   # Create symbols for the columns
+tol_metric_sym <- sym(tol.metric)
+growth_sym <- sym(x.variables.GrowthRate)
+  # Compute R^2 using a linear model
+# Create a formula for the lm function
+formula <- as.formula(paste(tol_metric_sym, "~", growth_sym))
+
+# Compute the linear model
+model <- lm(formula, data =    ggGrowthmodel)
+# Extract R-squared and p-value
+model_summary <- broom::glance(model)
+Rsqrd <- round(model_summary$r.squared,4)
+p_value <- model_summary$p.value
+ #Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+p_value <- ifelse(p_value < 0.001, " < 0.001",
+                    ifelse(p_value < 0.01, paste(" = ",
+                                                 round(p_value, 3),sep=""),
+                           paste(" = ",round(p_value, 2),sep="")))
+
+
+spearman_corr <- cor.test(   ggGrowthmodel[[growth_sym]] ,   ggGrowthmodel[[tol_metric_sym ]], method = "spearman")
+spearman_p_value <- spearman_corr$p.value
+
+
+# Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+spearman_p_value <- ifelse(spearman_p_value < 0.001, "< 0.001",
+                    ifelse(spearman_p_value< 0.01, round(spearman_p_value, 3),
+                           round(spearman_p_value, 2)))
+
+
+
+
+# Growth rate 
+ ggGrowth <-  Main.df %>%
+  select(all_of(tol.metric), 
+         all_of(x.variables.GrowthRate))%>%
+    drop_na()%>%
+    mutate(!!tol.metric :=  ((!!sym(tol.metric) / 72)))%>%
+   
+    mutate(Stats = paste("Rsqr = ", Rsqrd, "\n", 
+                     "Pearsons p", p_value, 
+                     sep = ""))%>%
+   mutate(Stats = paste(Stats,"\n",
+                          "Spearman p =" ,spearman_p_value,
+                     sep = ""))%>%
+  ggplot(aes(x = !!sym(x.variables.GrowthRate),
+             y = !!sym(tol.metric))) +
+   geom_point(stroke = 0,size = 0.5,alpha = 0.75) +
+
+  labs(x = "",  # Use expression for superscript
+            y = "",
+                    title = if (abx.H.or.L == "AMK^L") "Growth rate (per H)" else NULL  # Conditional title
+
+       ) +
+  geom_smooth(method = "lm", 
+              se = FALSE,
+              color = "blue",
+              size = 0.25) +  # Linear regression line
+     scale_y_continuous(limits = y_limits, breaks = y_breaks) +
+    scale_x_continuous(limits = c(0, 0.32), breaks = seq(0, 0.32, by = 0.1)) +  # Set y-axis limits and intervals
+      theme_prism(base_line_size =8/14,                   base_fontface = "plain")+
+
+    theme(  panel.border = element_blank(),
+                plot.margin = margin(10, 10, 10, 10),  # Set equal margins
+
+          legend.position = "none",
+          aspect.ratio = 1,
+                    axis.ticks = element_blank(),  # Remove axis ticks
+
+          strip.text = element_text(size = 10, face = "plain"),
+          axis.text.x = element_text(size = 7, face = "plain"),
+          axis.text.y = element_text(size = 7),
+
+            #  axis.text = element_text(size = 4) ,    # Adjust axis text size
+               axis.text = element_blank())+
+     coord_fixed(ratio = 1) + 
+
+   facet_wrap(~Stats)
+ 
+ggGrowth
+
+
+rm(Rsqrd,
+  p_value)
+
+# Dynamically name the list element according to the value of abx.H.or.L
+list.of.ggplot[[paste(abx.H.or.L, "_Growth",sep="")]] <-   ggGrowth
+
+
+
+   ggLagmodel <- Main.df %>%
+  select(all_of(tol.metric), 
+         all_of(x.variables.LagTime))%>%
+    drop_na()%>%
+    mutate(!!tol.metric :=  ((!!sym(tol.metric) / 72)))
+   
+   # Create symbols for the columns
+tol_metric_sym <- sym(tol.metric)
+lag_sym <- sym(x.variables.LagTime)
+  # Compute R^2 using a linear model
+# Create a formula for the lm function
+formula <- as.formula(paste(tol_metric_sym, "~", lag_sym))
+
+# Compute the linear model
+model <- lm(formula, data =    ggLagmodel)
+# Extract R-squared and p-value
+model_summary <- broom::glance(model)
+Rsqrd <- round(model_summary$r.squared,4)
+p_value <- model_summary$p.value
+ #Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+p_value <- ifelse(p_value < 0.001, " < 0.001",
+                    ifelse(p_value < 0.01, paste(" = ",
+                                                 round(p_value, 3),sep=""),
+                           paste(" = ",round(p_value, 2),sep="")))
+
+
+
+
+
+spearman_corr <- cor.test(   ggLagmodel[[lag_sym]] ,   ggLagmodel[[tol_metric_sym ]], method = "spearman")
+spearman_p_value <- spearman_corr$p.value
+
+
+# Apply the rounding rules and replace values less than 0.001 with "< 0.001"
+spearman_p_value <- ifelse(spearman_p_value < 0.001, "< 0.001",
+                    ifelse(spearman_p_value< 0.01, round(spearman_p_value, 3),
+                           round(spearman_p_value, 2)))
+
+
+
+# Lag
+ gglag <-  Main.df %>%
+  select(all_of(tol.metric), 
+         all_of(x.variables.LagTime))%>%
+    drop_na()%>%
+    mutate(!!tol.metric :=  ((!!sym(tol.metric) / 72)))%>%
+    mutate(Stats = paste("Rsqr = ", Rsqrd, "\n", 
+                     "Pearsons p", p_value, 
+                     sep = ""))%>%
+   mutate(Stats = paste(Stats,"\n",
+                          "Spearman p =" ,spearman_p_value,
+                     sep = ""))%>%
+  ggplot(aes(x = !!sym(x.variables.LagTime),
+             y = !!sym(tol.metric))) +
+    theme_prism(base_line_size =8/14,
+                  base_fontface = "plain")+
+  geom_point(stroke = 0,size = 0.5,alpha = 0.75) +
+  labs(x = expression(""),  # Use expression for superscript
+        y =   expression(""),
+                           title = if (abx.H.or.L == "AMK^L") "Lag time (H)" else NULL  # Conditional title
+
+       
+       ) +
+  geom_smooth(method = "lm", 
+              se = FALSE,
+              color = "blue",
+              size = 0.25) +  # Linear regression line
+  
+     scale_y_continuous(limits = y_limits, breaks = y_breaks) +
+    scale_x_continuous(limits = c(0, 48), breaks = seq(0, 48, by = 8)) +  # Set y-axis limits and intervals
+    theme(  panel.border = element_blank(),
+          legend.position = "none",
+          aspect.ratio = 1,
+                  axis.ticks = element_blank(),  # Remove axis ticks
+    plot.margin = margin(10, 10, 10, 10),  # Set equal margins
+
+          strip.text = element_text(size = 10, face = "plain"),
+          axis.text.x = element_text(size = 7, face = "plain"),
+          axis.text.y = element_text(size = 7, face = "plain"),
+            #  axis.text = element_text(size = 4) ,    # Adjust axis text size
+               axis.text = element_blank())+
+     coord_fixed(ratio = 1) + 
+
+   facet_wrap(~Stats)
+ 
+gglag
+# Dynamically name the list element according to the value of abx.H.or.L
+list.of.ggplot[[paste(abx.H.or.L, "_Lag",sep="")]] <-   gglag
+
+rm(Rsqrd,
+  p_value)
+
+
+  }
+```
+
+#Houskeeping
+```{r}
+rm(ggGrowth,
+   gglag,
+   ggMIC,
+   ggMICearly,
+   ggMIClate,
+
+
+model_summary,
+   model.AZM.early_summary,
+   model,
+   ggGrowthmodel,
+   ggLagmodel,
+   ggMICmodel,
+   ggMICmodel.AZMlate,
+   ggMICmodel.AZMearly,
+   model.AZM.late_summary,
+   model.AZM.late,
+   model.AZM.early)
+```
+
+```{r}
+subset_list <- list.of.ggplot[!grepl("AZM", names(list.of.ggplot))]
+subset_listAZM <- list.of.ggplot[grepl("AZM", names(list.of.ggplot))]
+
+
+# Create empty plots
+empty1 <- ggplot()  + theme_void()
+empty2 <- ggplot() + theme_void()
+
+# First chunk: elements 1 to 21
+subset_list_chunk1 <- subset_list[1:9] # 9
+
+subset_list_chunk2 <- subset_list[10:18] # 9
+
+subset_list_chunk3 <- subset_list[19:27] #9
+
+subset_list_chunk4 <- subset_list[28:36] #9
+
+
+subset_list_chunk5 <- subset_list[37:42] #9
+
+# Adding specific elements from subset_listAZM
+subset_list_chunk5$`AZM^L_MICearly` <- subset_listAZM$`AZM^L_MICearly`
+subset_list_chunk5$`AZM^L_Growth` <- subset_listAZM$`AZM^L_Growth`
+subset_list_chunk5$`AZM^L_Lag` <- subset_listAZM$`AZM^L_Lag`
+
+
+
+subset_listAZM_ORDERED2 <- list(
+  `AZM^H_MICearly` = subset_listAZM$`AZM^H_MICearly`,
+  `AZM^H_Growth` = subset_listAZM$`AZM^H_Growth`,
+  `AZM^H_Lag` = subset_listAZM$`AZM^H_Lag`,
+    `AZM^L_MIClate` = subset_listAZM$`AZM^L_MIClate`,
+  `AZM^H_MIClate` = subset_listAZM$`AZM^H_MIClate`,
+  empty1_duplicate = empty1,  # Second empty plot
+  empty2_duplicate = empty2 ,  # Second empty plot
+   empty2_duplicate = empty2   # Second empty plot
+)
+
+
+
+
+```
+
+
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(gridExtra)
+library(grid)
+
+Excluding.Criteria_Clean <- gsub("%", "perc", Excluding.Criteria)
+
+
+# Define the output path for the PDF
+plot.path <- paste0(resDir,
+                    "/",
+                    "ASCTsupp_Correlation_Tol_v_Growth.Lag.Resistance",
+                    "_Excl.",
+                    Excluding.Criteria_Clean,
+                    ".pdf",
+                    sep="")
+
+# Define the text to be added on the first page
+title_text <- paste("Correlation of different phenotypes: ", "\n Column 1 = MIC , column 2 = growth rate (per H), column 3 = lag time (H)\n",
+                    "Top ",
+                    Excluding.Criteria,
+                    " MIC excluded from analysis",
+                    
+                    sep="")
+
+# Open a PDF device to save the plots in portrait mode (height > width)
+pdf(plot.path, width = 8.5, height = 11)  # Portrait orientation with height > width
+
+# Create a text grob for the title
+title_grob <- textGrob(title_text, x = 0.5, y = 0.5, gp = gpar(fontsize = 10), just = "center")
+
+# Define the relative heights for the plots to reduce vertical space between rows
+heights <- unit(c(0.8, 0.8, 0.8), "null")  # Adjusted to have 3 elements for 3 rows
+
+# Arrange and save title on the first page
+grid.newpage()
+grid.draw(title_grob)
+
+# Arrange and save plots into the PDF with reduced vertical margins
+grid.arrange(grobs = subset_list_chunk1, nrow = 3, ncol = 3, top = NULL, heights = heights)
+grid.arrange(grobs = subset_list_chunk2, nrow = 3, ncol = 3, top = NULL, heights = heights)
+grid.arrange(grobs = subset_list_chunk3, nrow = 3, ncol = 3, top = NULL, heights = heights)
+grid.arrange(grobs = subset_list_chunk4, nrow = 3, ncol = 3, top = NULL, heights = heights)
+grid.arrange(grobs = subset_list_chunk5, nrow = 3, ncol = 3, top = NULL, heights = heights)
+
+
+grid.arrange(grobs = subset_listAZM_ORDERED2, nrow = 3, ncol = 3, top = NULL, heights = heights)
+
+# Close the PDF device
+dev.off()
+
+
+```
+
+
+```{r}
+
+```
+

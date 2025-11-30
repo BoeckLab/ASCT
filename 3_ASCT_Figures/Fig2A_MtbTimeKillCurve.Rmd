@@ -1,0 +1,427 @@
+
+# ================================================================
+# Aim
+# ================================================================
+# This script aggregates Trkv2 time-kill data across ASCT experiments
+# to generate mean 7-day time-kill curves for MTB isolates, grouped
+# by drug and experiment.
+
+# Functions:
+# - Load Trkv2 tracking (LCF_flags) and raw KF outputs for all
+#   experiments in ASCT_Data.
+# - Apply QC filters (Overall.Assessment == "Keep", Multiple.Events == "Keep")
+#   and keep only wells with valid KF endpoints.
+# - Align KF endpoint to the tracking timeline and adjust Time_Hrs
+#   using loopAB / loopBC offsets for long experiments.
+# - Compute mean live-cell fraction over time per drug × isolate.
+# - Annotate experiments with the number of drugs tested.
+# - Plot mean time-kill curves (percent cells alive) for each isolate,
+#   coloured by drug, faceted by experiment, and export as a PDF.
+
+# Section 1: Defining variables
+```{r setup, include=FALSE}
+
+genDir <- getwd() 
+
+
+#Pop data variables
+data.dir <- c("ASCT_Data")
+res.dir <- c("Experimental-Results")
+
+type.of.analysis <- c("Wellbased.Fitting")
+
+exp.res.dir <- c(paste(genDir,
+                       "/",
+                       "Experimental-Results",sep=""))
+wdDir <- genDir
+
+res.dir <- paste(genDir,"/",res.dir ,sep="")
+
+data.dir <- paste(genDir,
+                  "/",
+                  data.dir,
+                  sep="")
+setwd(wdDir)
+
+# list the experiment directories to pull the tracking data
+
+loopAB <- 2
+loopBC <- 4
+
+
+# EDIT the time scale axis that should be used 
+plot.xaxis.time.scale <- c(0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180)
+
+```
+
+# Section 2: Loading packages
+```{r}
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggforce)
+library(RColorBrewer)
+library(platetools)
+library(directlabels) 
+library(MESS)
+library(gghighlight)
+library(scales)
+library(GGally)
+library(ggcorrplot)
+library(reshape2)
+library(plotrix)
+library(ggprism)
+library(ggrepel)
+
+```
+
+## 2.1 Loop through Experimental Results
+```{r}
+
+Main.Tracking.df <- data.frame()
+
+Main.KF.df <- data.frame()
+
+# Load KF.intermediary table
+KFinter.files <- list.files(data.dir, pattern = "_Trkv2_KFintermediary.csv", full.names = TRUE)
+i <- KFinter.files[1]
+for ( i in     KFinter.files ) {
+    
+  
+  KF.intermediary.df <- read.csv(i)
+    print(i)
+         KF.intermediary.df <-   KF.intermediary.df %>%
+           filter(Merge.def == "Trkv2_Ila2BaSic")%>%
+           select(ExpFile,
+                  Abx.con,
+                  Well_coordinate,
+                  Multiple.Events)%>%
+           distinct()
+
+         x <- sub(
+                  "_Trkv2_KFintermediary.csv$",
+                  "_Trkv2_LCF_flags.csv",i)
+    
+  # Load Trkv2 Flags
+
+  Tracking.df <- read.csv(   x )
+  
+    Tracking.df <-   Tracking.df %>%
+      filter(Time.Kill.Definitions == "Trkv2_LCF_Ila2BaSic")%>%
+      left_join(         KF.intermediary.df )
+    
+    
+    Main.Tracking.df <- rbind(    Main.Tracking.df,
+                                     Tracking.df )
+    
+    
+
+ x <- sub(
+              
+                  "_Trkv2_LCF_flags.csv$",
+                   "_Trkv2_rawKF.csv",
+                  i)
+        
+    KFraw <- read.csv(   x )
+    
+    KFraw <-KFraw %>%
+      filter(Killing.Def == "Trkv2_LCF_Ila2BaSic")
+    
+    
+    Main.KF.df <- rbind(    Main.KF.df ,   KFraw )
+    
+
+    }
+    
+
+
+  rm(KF.intermediary.df,
+     KFraw,
+     Tracking.df)
+
+```
+
+
+
+```{r}
+# ---
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Killing.Def = gsub("Trkv2_LCF_Ila2BaSic","Trkv2_Ila2BaSic", Killing.Def))
+  
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(Sub.KF = Killing.Features)%>%
+  mutate(Sub.KF = gsub("Trkv2_LCF_","",Sub.KF))%>%
+    mutate(Sub.KF= gsub("_Ila2BaSic", "",Sub.KF))%>%
+  mutate(Time_Hrs = gsub("h","",Sub.KF)) %>%
+  mutate(Time_Hrs = as.numeric(Time_Hrs))%>%
+  mutate(Time.Kill.Definitions = Killing.Def)%>%
+  mutate(LC.fraction.corr = value)%>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))%>%
+  select(ExpFile,
+         Abx.con,
+         Isolate,
+         ExpFile.Wellcoordinate ,
+         Well_coordinate,
+         Time_Hrs,
+         Time.Kill.Definitions ,
+         LC.fraction.corr)%>%
+  distinct()%>%
+  filter(Time_Hrs == max(plot.xaxis.time.scale)) 
+  
+
+
+# ---
+Main.Tracking.df <- Main.Tracking.df %>%
+  ungroup()%>%
+  filter(Overall.Assessment == "Keep" &
+           Multiple.Events == "Keep")
+
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpFile.Wellcoordinate = paste(ExpFile,
+                                        Well_coordinate,
+                                        sep="_"))
+ 
+
+Main.Tracking.df <- Main.Tracking.df %>%
+mutate(timestep = as.numeric(timestep))
+
+
+list.of.Well.coordinates.Kept.in.analysis <- unique(Main.Tracking.df$ExpFile.Wellcoordinate)
+
+Main.KF.df <- Main.KF.df %>%
+  filter(ExpFile.Wellcoordinate %in% list.of.Well.coordinates.Kept.in.analysis)
+
+Main.KF.df <- Main.KF.df %>%
+  mutate(timestep = as.numeric(max(Main.Tracking.df$timestep)+1))
+
+# Assume your y-axis linear scale values range from 1 to 100%
+
+linear_breaks <- c( 40,50,60 ,70,80,90, 100) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+Main.KF.df  <- Main.KF.df %>%
+  mutate(ExpID =paste("ASCT.",
+                      gsub("^.*\\.(.*)\\..*$", "\\1", ExpFile),
+                      sep=""))
+
+
+```
+
+# Merging Killing Features and Main tracking Data 
+```{r}
+
+Exp.QC <- Main.Tracking.df %>%
+  select(ExpFile,
+         Well_coordinate,
+         Flag.label,
+         Overall.Assessment,
+         Multiple.Events)%>%
+  distinct()
+  
+
+variable_names <- names(Main.KF.df)
+
+Main.Tracking.df <- Main.Tracking.df %>%
+   select(all_of(variable_names))
+
+Main.KF.df  <- Main.KF.df %>%
+  mutate(Time.Kill.Definitions = if_else(Time.Kill.Definitions == "Trkv2_Ila2BaSic", "Trkv2_LCF_Ilas2BaSic", Time.Kill.Definitions))
+  
+Main.Tracking.df <- rbind(Main.Tracking.df,
+                          Main.KF.df)
+
+Main.Tracking.df <- Main.Tracking.df %>%
+  left_join(Exp.QC)
+
+
+rm(Exp.QC)
+
+
+```
+
+
+```{r}
+
+
+# Modify the dataframe
+Main.Tracking.df <- Main.Tracking.df %>%
+  group_by(ExpID, Isolate, Abx.con,Well_coordinate) %>% # Group by the specified columns
+  mutate(
+    Time_Hrs = ifelse(timestep >= 19 , Time_Hrs + loopAB,
+                      ifelse(timestep >= 37, Time_Hrs +  loopAB + loopBC, Time_Hrs)) # Add hours based on timestep
+  )
+
+```
+
+```{r}
+library(stringr)
+Main.Mean.Tracking.df<- Main.Tracking.df %>%
+
+  group_by(#ExpFile,
+           Abx.con,
+           Isolate,
+           timestep)%>%
+mutate(Mean.LC.fraction.corr = mean(LC.fraction.corr),
+         Mean.Time_Hrs = mean(Time_Hrs))%>%
+  ungroup()%>%
+  filter(Time_Hrs <= max(plot.xaxis.time.scale))%>%
+  select(ExpID,
+         Time.Kill.Definitions,
+         Abx.con,
+         Isolate,   
+         Mean.Time_Hrs,
+         Mean.LC.fraction.corr)%>%
+  distinct()%>%
+  mutate(Drug=   sub("_.*", "", Abx.con)  )%>%
+  mutate(Isolate = gsub("7h9","pan",Isolate))%>%
+  mutate(Isolate = gsub("log","",Isolate))%>%
+  mutate(Type.of.Analysis = type.of.analysis)%>%
+  filter(!Drug %in% c("Ka", "Kb", "Kc", "NodDrug"))%>%
+  filter(Isolate != "Iso.Hipos")
+```
+
+
+```{r}
+#----------
+
+N.drugs.In.exp <- Main.Mean.Tracking.df %>%
+  select(Drug)%>%
+  distinct()
+ 
+N.drugs.In.exp<-   nrow(N.drugs.In.exp)
+
+
+
+Conditions.df.Drugs.perExp <- Main.Mean.Tracking.df %>%
+  select(ExpID,
+         Drug,
+         Isolate)%>%
+  distinct()%>%
+  group_by(ExpID,
+           Isolate)%>%
+  mutate(N.Drugs.per.Exp =1,
+         N.Drugs.per.Exp = sum(N.Drugs.per.Exp ))%>%
+  ungroup()%>%
+  mutate(        N.Drugs.per.Exp = paste(N.Drugs.per.Exp,
+                                  "/",
+                                N.drugs.In.exp ,
+                                  sep=""))%>%
+  ungroup()%>%
+  select(ExpID,
+          Isolate,
+          N.Drugs.per.Exp)%>%
+  distinct()
+
+
+Main.Mean.Tracking.df <- left_join(Main.Mean.Tracking.df ,
+                           Conditions.df.Drugs.perExp)
+
+
+Main.Mean.Tracking.df <- Main.Mean.Tracking.df %>%
+ mutate(N.Drugs.per.Exp = paste("N.drugs: ",
+                                 N.Drugs.per.Exp,
+                                 sep=""))
+
+
+
+rm(N.drugs.In.exp,
+   Conditions.df.Drugs.perExp)
+
+
+x <- unique(Main.Mean.Tracking.df$Abx.con)
+```
+
+
+
+
+```{r}
+plot.filename <- paste(exp.res.dir, "/ASCTmtb_Mean_TimeKillcurve_7dayExp_", type.of.analysis,"_loopAB",loopAB,"h_loopBC", loopBC, "h_MTBmc27000.pbs.Starved_StandardTreatment.pdf", sep = "")
+
+x_values <- c(3, 6, 9, 12, 24, 48)
+
+#--- Y axis ticks
+
+linear_breaks <- c(0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.0) # Modify this based on your data
+
+# Convert these to log10 scale for the breaks
+log_breaks <- log10(linear_breaks)
+
+linear_breaks.label <- c(40, 50, 60, 70, 80, 90, 100)
+#---
+
+# Set colors based on the drug names
+Main.Mean.Tracking.df <- Main.Mean.Tracking.df %>%
+  mutate(color = case_when(
+    Drug == "EHRZ" ~ "darkblue",
+    Drug == "HR" ~ "steelblue",
+    Drug == "BLPa" ~ "red",
+    Drug == "BPaZ" ~ "purple",
+
+    grepl("B|Pa|C", Drug) ~ "darkgreen",
+    TRUE ~ "black"
+  ))
+
+library(ggrepel)
+gg <- Main.Mean.Tracking.df %>%
+  mutate(Mean.LC.fraction.corr = Mean.LC.fraction.corr * 100) %>%
+  filter(Mean.Time_Hrs <= max(plot.xaxis.time.scale)) %>%
+  filter(Isolate == "Iso.mc27000pbsStrvd") %>%
+  ungroup() %>%
+  ggplot(aes(x = Mean.Time_Hrs,
+             y = Mean.LC.fraction.corr,
+             group = Drug,
+             label = Drug,
+             colour = color)) +  # Use the color column for colors
+  geom_line(alpha = 0.50, size = 0.2, stroke = 0) +
+  scale_colour_identity() +  # Use the colors as defined
+  theme_prism(base_line_size = 0.2) +
+  scale_y_continuous(breaks = c(0, 20, 40, 60, 80, 100),
+                     limits = c(0, 100),
+                     labels = c(0, 20, 20, 60, 80, 100)) +
+  theme(axis.text = element_text(size = 7)) +
+  theme(strip.text.x = element_text(size = 7)) +
+  theme(legend.key.size = unit(0.1, "cm"),
+        legend.key.width = unit(0.1, "cm")) +
+  scale_x_continuous(breaks = plot.xaxis.time.scale) +
+  labs(title = paste("Mean time kill kinetics of MTb Isolates loopAB", loopAB, "h loopBC", loopBC ,"h", sep=""),
+       subtitle = "linear scale",
+       x = "Time [Hrs]",
+       y = "Percent of cells alive [%]",
+       color = "Drugs") +
+  theme(legend.position = "top") +
+  theme(aspect.ratio = 1) +
+  theme(plot.subtitle = element_text(size = 7)) +
+  theme(legend.position = "none") +  # Removes the legend
+  facet_wrap_paginate(ExpID + N.Drugs.per.Exp + Type.of.Analysis ~ Isolate,
+                      ncol = 1,
+                      nrow = 1,
+                      page = 1)
+
+n <- n_pages(gg)
+
+pdf(plot.filename, paper = "a4", width = 20, height = 15)
+for(i in 1:n){
+    print(gg + facet_wrap_paginate(ExpID + N.Drugs.per.Exp + Type.of.Analysis ~ Isolate,
+                      ncol = 1,
+                      nrow = 1, page = i)) ## WORKS with 240 wells ## I think Error: Cannot create zero-length unit vector ("unit" subsetting) means it does not know how to plot the remaining 2 wells on the last page given ncol 4 and nrow 6
+}
+dev.off()
+
+# Housekeeping
+rm(gg, plot.filename, g)
+
+
+```

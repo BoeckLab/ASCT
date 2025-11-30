@@ -1,0 +1,802 @@
+---
+title: "ASCTreporter PI_GFP"
+author: "Alex"
+date: "2025-07-29"
+output: html_document
+---
+
+# ================================================================
+# Aim
+# ================================================================
+# This script processes ASCT reporter data (GFP / PI channels) from
+# GOC, MOC, and POC outputs to generate gated FACS-like plots across
+# antibiotics and timepoints.
+#
+# Functions:
+# - Load and merge GOC, MOC, and POC intensity + classification data.
+# - Filter for single-cell objects (MOC = "SC").
+# - Assign antibiotic conditions based on well coordinates.
+# - Compute log-transformed PI and GFP intensities.
+# - Derive gating thresholds (manual, mean–SD, GMM).
+# - Classify cells into GFP+/− and PI+/− quadrants per method.
+# - Count quadrant frequencies per antibiotic × timepoint.
+# - Generate hex-density FACS plots with gating overlays and quadrant
+#   percentages (Fig. 1F style).
+#
+# Output:
+# - Gated FACS PDFs for each thresholding strategy.
+# - Clean merged reporter dataset for downstream analysis.
+
+# 1. load libraries
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(data.table)
+library(parallel)
+
+```
+
+# 2. Define paths
+```{r}
+info.wd <- getwd()
+info.expID <- c("ASCTrep.01.20250722")
+info.ASCTdir <- c("ASCT_data")
+
+info.data.dir.GOC <-c("GOCcsv")
+info.data.dir.MOC <-c("MOCcsv")
+info.data.dir.POC <-c("POCcsv")
+
+
+```
+
+# Load GOC
+```{r}
+# Construct full path to the GOC CSV folder
+data_path_GOC <- file.path(
+  info.wd,
+  info.ASCTdir,
+  paste0(info.expID, "_", info.data.dir.GOC)
+)
+
+# List all CSV files
+files <- list.files(data_path_GOC, pattern = "\\.csv$", full.names = TRUE)
+
+# Combine all CSV files into one data frame
+GOC.df <- do.call(rbind, lapply(files, function(f) {
+  if (file.size(f) > 1) {         # only read if larger than 1 byte
+    df <- read.csv(f, stringsAsFactors = FALSE)
+    df$source_file <- basename(f)
+    return(df)
+  } else {
+    message("Skipping empty file: ", f)
+    return(NULL)
+  }
+}))
+
+# Check dimensions and preview
+
+GOC.df <- GOC.df %>%
+  mutate(Predicted.Class.GOC = if_else(Predicted.Class == "piNEG", "-", "+"))%>%
+    mutate( Mean.Intensity.GOC = Mean.Intensity)%>%
+
+  select(source_file,
+         timestep,
+         Size.in.pixels,
+         Center.of.the.object_0,
+         Center.of.the.object_1,
+         Predicted.Class.GOC,
+Mean.Intensity.GOC)
+
+
+```
+
+# Load MOC
+```{r}
+# Construct full path to the MOC CSV folder
+data_path_MOC <- file.path(
+  info.wd,
+  info.ASCTdir,
+  paste0(info.expID, "_", info.data.dir.MOC)
+)
+
+# List all CSV files
+files <- list.files(data_path_MOC, pattern = "\\.csv$", full.names = TRUE)
+
+# Combine all CSV files into one data frame
+MOC.df <- do.call(rbind, lapply(files, function(f) {
+  if (file.size(f) > 1) {         # only read if larger than 1 byte
+    df <- read.csv(f, stringsAsFactors = FALSE)
+    df$source_file <- basename(f)
+    return(df)
+  } else {
+    message("Skipping empty file: ", f)
+    return(NULL)
+  }
+}))
+
+# Check dimensions and preview
+
+MOC.df <- MOC.df %>%
+  mutate(Predicted.Class.MOC =     Predicted.Class)%>%
+  select(source_file,
+         timestep,
+         Size.in.pixels,
+         Center.of.the.object_0,
+         Center.of.the.object_1,
+         Predicted.Class.MOC)
+```
+
+
+```{r}
+# Construct full path to the POC CSV folder
+data_path_POC <- file.path(
+  info.wd,
+  info.ASCTdir,
+  paste0(info.expID, "_", info.data.dir.POC)
+)
+
+# List all CSV files
+files <- list.files(data_path_POC, pattern = "\\.csv$", full.names = TRUE)
+
+# Combine all CSV files into one data frame
+POC.df <- do.call(rbind, lapply(files, function(f) {
+  if (file.size(f) > 1) {         # only read if larger than 1 byte
+    df <- read.csv(f, stringsAsFactors = FALSE)
+    df$source_file <- basename(f)
+    return(df)
+  } else {
+    message("Skipping empty file: ", f)
+    return(NULL)
+  }
+}))
+
+# Check dimensions and preview
+
+POC.df <- POC.df %>%
+    mutate(Predicted.Class.POC = if_else(Predicted.Class == "piNEG", "-", "+"))%>%
+
+    mutate(   Mean.Intensity.POC =     Mean.Intensity)%>%
+
+  select(source_file,
+         timestep,
+         Size.in.pixels,
+         Center.of.the.object_0,
+         Center.of.the.object_1,
+         Predicted.Class.POC,
+         Mean.Intensity.POC)
+```
+# Merging data
+```{r}
+MOC.df <- MOC.df %>%
+  mutate(Well_coordinate = sub("OCsimple_MOC_","", source_file))%>%
+  mutate(Well_coordinate =sub(".csv","",Well_coordinate))%>%
+  select(-source_file)
+
+POC.df <- POC.df %>%
+  mutate(Well_coordinate = sub("OCsimple_POCbSd_","", source_file))%>%
+  mutate(Well_coordinate =sub(".csv","",Well_coordinate))%>%
+  select(-source_file)
+
+GOC.df <- GOC.df %>%
+  mutate(Well_coordinate = sub("OCsimple_GOC_","", source_file))%>%
+  mutate(Well_coordinate =sub(".csv","",Well_coordinate))%>%
+  select(-source_file)
+```
+
+```{r}
+ASCTrep.df <- left_join(MOC.df,
+                        POC.df)
+
+ASCTrep.df <- left_join(ASCTrep.df ,
+                        GOC.df)
+
+rm(MOC.df,
+   POC.df,
+   GOC.df)
+
+ASCTrep.df <-ASCTrep.df %>%
+  select(Well_coordinate,
+         Center.of.the.object_0,
+         Center.of.the.object_1,
+         timestep,
+         Size.in.pixels,
+         Predicted.Class.MOC,
+
+         Predicted.Class.POC,
+         Mean.Intensity.POC,
+                  Predicted.Class.GOC,
+                  Mean.Intensity.GOC)
+```
+
+# Selecting MOC class 
+```{r}
+# FILTERING FOR SC only
+ASCTrep.df <- ASCTrep.df %>%
+  filter(Predicted.Class.MOC == "SC")
+  #filter(Predicted.Class.MOC == "SC" | Predicted.Class.MOC == "VS")%>%
+#  filter(Predicted.Class.MOC == "SC" | Predicted.Class.MOC == "VS" | Predicted.Class.MOC == "C2")
+
+
+```
+## Free unused memory
+```{r}
+gc()
+```
+
+```{r}
+ASCTrep.df <- ASCTrep.df %>%
+  separate(
+    col = Well_coordinate,
+    into = c("ExpID", "Well_coordinate", "Field"),
+    sep = "_",
+    remove = FALSE  # keep the original column
+  )
+
+#----
+```
+
+
+```{r}
+ASCTrep.df <- ASCTrep.df %>%
+
+  select(ExpID,
+         Well_coordinate,
+         Field,
+         Center.of.the.object_0,
+         Center.of.the.object_1,
+         timestep,
+         Size.in.pixels,
+         Predicted.Class.MOC,
+ Predicted.Class.POC,
+         Mean.Intensity.POC,
+                  Predicted.Class.GOC,
+                  Mean.Intensity.GOC)%>%
+  drop_na()
+
+
+ASCTrep.df$class <- with(ASCTrep.df, paste0("GFP", Predicted.Class.GOC, "_PI", Predicted.Class.POC))
+table(ASCTrep.df$class)
+
+
+ASCTrep.df <- ASCTrep.df %>%
+  mutate(
+    Abx.con = case_when(
+      Well_coordinate %in% c("B3","B4","B5") ~ "IPM",
+      Well_coordinate %in% c("C3","C4","C5") ~ "FOX",
+      Well_coordinate %in% c("D3","D4","D5") ~ "AMK",
+      Well_coordinate %in% c("E3","E4","E5") ~ "TGC",
+      Well_coordinate %in% c("F3","F4","F5") ~ "MIN",
+      Well_coordinate %in% c("G3","G4","G5") ~ "AZM",
+      Well_coordinate %in% c("H3","H4","H5") ~ "MXF",
+      Well_coordinate %in% c("I3","I4","I5") ~ "LIN",
+      Well_coordinate %in% c("J3","J4","J5") ~ "ATc",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+
+```{r}
+keep_abx <- c("ATc", "FOX",  "MXF", "AMK")
+
+ASCTrep.df  <- ASCTrep.df %>%
+ # filter(timestep %in% selected_tsteps) %>%
+  mutate(timestep = timestep * 0.5)%>%
+  filter(timestep <= 24)%>%
+    mutate(timestep = if_else(timestep == 23.5, 24, timestep))%>%
+ mutate(timestep = as.numeric(timestep))%>% # convert back to numeric
+      filter(                     Abx.con %in% keep_abx)
+
+ASCTrep.df<- ASCTrep.df %>%
+  dplyr::filter(timestep %in% c(0, 2, 4, 6, 8, 10, 12))
+
+
+
+library(dplyr)
+
+
+
+```
+
+
+# FACS like plots 
+## FACS plots without gating
+```{r}
+
+library(ggplot2)
+library(ggpubr)
+library(wesanderson)
+library(mclust)
+
+# Subset controls
+GFP_control <- subset(ASCTrep.df, Abx.con == "ATc" & Mean.Intensity.GOC > 0 & timestep == 0)
+PI_control  <- subset(ASCTrep.df, Abx.con %in% c("ATc") & Mean.Intensity.POC > 0 & timestep == 0)
+
+# Add log10-transformed intensity columns
+GFP_control$Mean.Intensity.GOC.log10 <- log10(GFP_control$Mean.Intensity.GOC)
+PI_control$Mean.Intensity.POC.log10 <- log10(PI_control$Mean.Intensity.POC)
+
+manual_GFP_log <- 1.75
+manual_PI_log  <- 1.75
+
+# Mean ± 3SD thresholds
+threshold_GFP_log_mean1sd <- mean(GFP_control$Mean.Intensity.GOC.log10, na.rm = TRUE) - sd(GFP_control$Mean.Intensity.GOC.log10, na.rm = TRUE)
+
+threshold_PI_log_mean1sd <- mean(PI_control$Mean.Intensity.POC.log10, na.rm = TRUE) - sd(PI_control$Mean.Intensity.POC.log10, na.rm = TRUE)
+
+# GMM thresholds (midpoint between means)
+
+
+gmm_GFP <- Mclust(GFP_control$Mean.Intensity.GOC.log10, G = 2)
+means_GFP <- sort(gmm_GFP$parameters$mean)
+threshold_GFP_log_gmm <- mean(means_GFP)
+
+# GMM on PI
+gmm_PI <- Mclust(PI_control$Mean.Intensity.POC.log10, G = 2)
+means_PI <- sort(gmm_PI$parameters$mean)
+threshold_PI_log_gmm <- mean(means_PI)
+
+```
+
+
+
+```{r}
+# 1. Add log10 columns to the full dataframe (if not already present)
+ASCTrep.df$Mean.Intensity.POC.log10 <- log10(ASCTrep.df$Mean.Intensity.POC)
+ASCTrep.df$Mean.Intensity.GOC.log10 <- log10(ASCTrep.df$Mean.Intensity.GOC)
+
+# 2. Define a helper function for gating
+gate_status <- function(log_gfp, log_pi, gfp_thresh, pi_thresh) {
+  if (is.na(log_gfp) | is.na(log_pi)) return(NA)
+  gfp_label <- ifelse(log_gfp > gfp_thresh, "GFP+", "GFP-")
+  pi_label  <- ifelse(log_pi  > pi_thresh,  "PI+",  "PI-")
+  return(paste(gfp_label, pi_label, sep = "_"))
+}
+
+# 3. Apply all three gating strategies
+
+## Manual thresholds
+ASCTrep.df$gate_manual <- mapply(
+  gate_status,
+  ASCTrep.df$Mean.Intensity.GOC.log10,
+  ASCTrep.df$Mean.Intensity.POC.log10,
+  manual_GFP_log,
+  manual_PI_log
+)
+
+## Mean − 3SD thresholds
+ASCTrep.df$gate_mean1sd <- mapply(
+  gate_status,
+  ASCTrep.df$Mean.Intensity.GOC.log10,
+  ASCTrep.df$Mean.Intensity.POC.log10,
+  threshold_GFP_log_mean1sd,
+  threshold_PI_log_mean1sd
+)
+
+## GMM thresholds
+ASCTrep.df$gate_gmm <- mapply(
+  gate_status,
+  ASCTrep.df$Mean.Intensity.GOC.log10,
+  ASCTrep.df$Mean.Intensity.POC.log10,
+  threshold_GFP_log_gmm,
+  threshold_PI_log_gmm
+)
+
+ASCTrep.df <- ASCTrep.df %>%
+  ungroup()%>%
+  mutate(GMM.only = sub("_.*", "",gate_gmm))%>%
+  mutate(gate_GMM.GFP_Ila.PI = paste(GMM.only,
+                                "_",
+                                "PI",
+                                Predicted.Class.POC,
+                                sep=""))
+
+
+```
+
+
+```{r}
+# 1. Reshape to long format across all three gating strategies
+df_long_all <- ASCTrep.df %>%
+  select(Abx.con, timestep, gate_manual, gate_mean1sd, gate_gmm, gate_GMM.GFP_Ila.PI) %>%
+  pivot_longer(
+    cols = starts_with("gate_"),
+    names_to = "strategy",
+    names_prefix = "gate_",
+    values_to = "category"
+  ) %>%
+  filter(!is.na(category))
+
+# Zissou palette
+zissou_cols <- wes_palette("Zissou1", type = "continuous")
+
+# 2. Count cells per category × strategy × Abx × timestep
+df_counts <- df_long_all %>%
+  group_by(strategy, Abx.con, timestep, category) %>%
+  summarise(count = n(), .groups = "drop")
+
+# 3. Define quadrant position and labels
+pos_map <- tibble(
+  category = c("GFP+_PI+", "GFP+_PI-", "GFP-_PI+", "GFP-_PI-"),
+  x = c(3.25, 0.2, 3.25, 0.2),
+  y = c(3.25, 3.25, 0.2, 0.2),
+  quad_label = c("PI+ GFP+", "PI- GFP+", "PI+ GFP-", "PI- GFP-")
+)
+
+# 4. Join labels and compute percentage and label text
+df_counts <- df_counts %>%
+  left_join(pos_map, by = "category") %>%
+  group_by(strategy, Abx.con, timestep) %>%
+  mutate(
+    percent = 100 * count / sum(count),
+    label_text = paste0(
+      round(percent, 1), "%\n",
+      count, "\n",
+      quad_label
+    )
+  ) %>%
+  ungroup()
+```
+
+
+```{r}
+
+ASCTrep.df <- ASCTrep.df %>%
+  mutate(Abx.con = ifelse(Abx.con == "ATc", "Control", Abx.con))
+
+ASCTrep.df <- ASCTrep.df%>%
+    filter(!(Abx.con == "Control" & timestep > 0))
+
+  
+
+df_counts <- df_counts %>%
+    mutate(Abx.con = ifelse(Abx.con == "ATc", "Control", Abx.con))
+
+
+df_counts <- df_counts %>%
+  filter(!(Abx.con == "Control" & timestep > 0))
+
+```
+
+## Threshold strategies and counts per timepoint with percentages
+```{r}
+
+# Define parameters for each strategy
+#strategies <- c("manual", "mean1sd", "gmm" , "GMM.GFP_Ila.PI")
+strategies <- c( "gmm" )
+
+#vlines <- c(manual_PI_log, threshold_PI_log_mean1sd, threshold_PI_log_gmm)
+vlines <- c( threshold_PI_log_gmm)
+
+#hlines <- c(manual_GFP_log, threshold_GFP_log_mean1sd, threshold_GFP_log_gmm)
+hlines <- c( threshold_GFP_log_gmm)
+
+#linetypes <- c("solid", "dotted", "dashed")
+
+linetypes <- c( "dashed")
+
+
+
+captions <- c("Thresholds shown: Dashed lines = Gaussian Mixture Model thresholds GFP intensity for GFP threshold\n PI intensity for PI thrs using ATc control at t0")
+
+
+
+thresholds_list <- list(
+ 
+  gmm = list(
+    GFP = threshold_GFP_log_gmm,
+    PI = threshold_PI_log_gmm
+  )
+  
+)
+
+
+# Loop through each strategy
+for (i in seq_along(strategies)) {
+  
+  strategy <- strategies[i]
+  str.filter <-  strategy 
+  lt <- linetypes[i]
+  caption_text <- captions[i]
+  thrs <- thresholds_list[[strategy]]
+  
+  df_labels <- df_counts %>%
+    filter(strategy ==  str.filter)%>%
+    ungroup()%>%
+    group_by(strategy,
+             Abx.con,
+             timestep)%>%
+      mutate(
+    label_text = paste0(
+      round(percent, 1), "%\n",  # % at the top
+      count, "\n"#,               # count in the middle
+ #     quad_label                # label on the bottom (e.g., PI+ GFP+)
+    )
+  ) # 👈 REMOVE this column
+
+
+
+  p <- ggplot(ASCTrep.df, aes(
+    x = Mean.Intensity.POC.log10,
+    y = Mean.Intensity.GOC.log10)) +
+    geom_hex(bins = 100) +
+    scale_fill_gradientn(
+      colors = zissou_cols,
+      trans = "log10",
+      name = "Cell count"
+    ) +
+   # coord_cartesian(xlim = c(0, 3.75), ylim = c(0, 3.75)) +
+    geom_vline(xintercept = thrs$PI, linetype = lt, color = "black", linewidth = 0.8) +
+    geom_hline(yintercept = thrs$GFP, linetype = lt, color = "black", linewidth = 0.8) +
+
+    # ✅ Clean quadrant labels at grid positions
+geom_text(
+  data = df_labels,
+  aes(
+    x = x,
+    y = y,
+    label = label_text,
+    group = interaction(Abx.con, timestep )  # helps ensure grouping
+  ),
+  inherit.aes = FALSE,
+  size = 4,
+  lineheight = 0.9,
+ # fontface = "bold",
+  color = "black"
+)+
+    labs(
+      x = "log10 PI intensity (au)",
+      y = "log10 GFP intensity (au)",
+    ) +
+      guides(
+    fill = guide_colorbar(
+      barwidth  = unit(0.15, "in"),  # thinner bar
+      barheight = unit(1.8, "in"),   # shorter height
+      title.position = "top"
+    )
+  ) +
+    theme_pubr() +
+        scale_x_continuous(
+      limits = c(-0.5, 3.75),
+      breaks = c(0, 1, 2, 3)
+    ) +
+    scale_y_continuous(
+      limits = c(-0.5, 3.75),
+      breaks = c(0, 1, 2, 3)
+    ) +
+    theme(
+   ## --- Facet labels & strips ---
+    strip.placement = "outside",
+    strip.background = element_blank(),
+    strip.text.y.left = element_text(angle = 0, size = 14, margin = margin(1, 2, 1, 2, "pt")),
+    strip.text.x = element_text(size = 14, margin = margin(2, 2, 2, 2, "pt")),
+    ## --- Panel & grid ---
+    aspect.ratio = 1,
+    panel.grid = element_line(size = 0.2),
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 2),
+    panel.spacing.x = unit(0.06, "in"),
+    panel.spacing.y = unit(0.08, "in"),
+
+    ## --- Axes ---
+   ## Axis text
+    axis.text = element_text(size = 14),  # match facet label size
+    axis.title = element_text(size = 14, margin = margin(2, 2, 2, 2, "pt")),
+
+    
+    axis.ticks = element_blank(),        # remove ticks entirely
+    axis.line = element_blank(),         # use panel.border instead
+
+
+    ## --- Legend ---
+    legend.position = "right",
+    legend.margin = margin(0, 0, 0, 0, "pt"),
+    legend.box.margin = margin(0, 0, 0, 0, "pt"),
+    legend.key.height = unit(0.15, "in"),
+    legend.key.width  = unit(0.15, "in"),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 14),
+
+    ## --- Caption ---
+
+    ## --- Outer margins ---
+    plot.margin = margin(4, 6, 4, 6, "mm")
+      ) +
+    facet_grid(Abx.con ~ timestep, switch = "y") 
+
+
+ # Keep square panels and make each facet ~2.5" wide/high
+n_cols <- 7
+n_rows <- 4
+facet_width  <- 2.5  # inches per facet (tweak if you want bigger/smaller)
+facet_height <- 2.5
+
+# Optional: a touch more breathing room between panels
+p <- p + theme(panel.spacing = grid::unit(0.15, "in"))
+
+ggsave(
+  filename = file.path(
+    info.wd, "Experimental-Results",
+    paste0(info.expID, "_FACS_gating_", strategy, "_20250815_Fig1_Manuscript.pdf")
+  ),
+  plot = p,
+  width = n_cols * facet_width,   # 7 * 2.5 = 17.5 in
+  height = n_rows * facet_height, # 3 * 2.5 = 7.5 in
+  units = "in",
+  device = "pdf"
+)
+}
+
+```
+
+
+```{r}
+ASCTrep.df <- ASCTrep.df 
+```
+
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forcats)   # for fct_relevel
+
+# -- ensure facet order & empty panels -----------------------------
+
+
+
+# put Control last in the row order
+abx_levels <- c("Control", setdiff(unique(ASCTrep.df$Abx.con), "Control"))
+
+# apply factors to BOTH plotting df and labels df so facets align
+ASCTrep.df <- ASCTrep.df %>%
+  mutate(
+    Abx.con = factor(Abx.con, levels = abx_levels),
+    #timestep = factor(timestep, levels = ts_levels, ordered = TRUE)
+        timestep = factor(timestep, levels = unique(timestep), ordered = TRUE)
+
+  )
+
+df_counts <- df_counts %>%
+  mutate(
+    Abx.con = factor(Abx.con, levels = abx_levels),
+        timestep = factor(timestep, levels = unique(timestep), ordered = TRUE)
+
+  #  timestep = factor(timestep, levels = ts_levels, ordered = TRUE)
+  )
+
+# -----------------------------------------------------------------
+
+# Define parameters for each strategy
+strategies <- c("gmm")
+vlines <- c(threshold_PI_log_gmm)
+hlines <- c(threshold_GFP_log_gmm)
+linetypes <- c("dashed")
+captions <- c(
+  "Thresholds shown: Dashed lines = Gaussian Mixture Model thresholds GFP intensity for GFP threshold\n PI intensity for PI thrs using ATc control at t0"
+)
+
+thresholds_list <- list(
+  gmm = list(
+    GFP = threshold_GFP_log_gmm,
+    PI  = threshold_PI_log_gmm
+  )
+)
+
+# Loop through each strategy
+for (i in seq_along(strategies)) {
+
+  strategy <- strategies[i]
+  str.filter <- strategy
+  lt <- linetypes[i]
+  caption_text <- captions[i]
+  thrs <- thresholds_list[[strategy]]
+
+  df_labels <- df_counts %>%
+    filter(strategy == str.filter) %>%
+    ungroup() %>%
+    group_by(strategy, Abx.con, timestep) %>%
+    mutate(
+      label_text = paste0(
+        round(percent, 1), "%\n",
+        count, "\n"
+      )
+    )
+
+  p <- ggplot(
+    ASCTrep.df,
+    aes(x = Mean.Intensity.POC.log10, y = Mean.Intensity.GOC.log10)
+  ) +
+    geom_hex(bins = 100) +
+    scale_fill_gradientn(
+      colors = zissou_cols,
+      trans = "log10",
+      name = "Cell count"
+    ) +
+    geom_vline(xintercept = thrs$PI,  linetype = lt, color = "black", linewidth = 0.8) +
+    geom_hline(yintercept = thrs$GFP, linetype = lt, color = "black", linewidth = 0.8) +
+    geom_text(
+      data = df_labels,
+      aes(x = x, y = y, label = label_text, group = interaction(Abx.con, timestep)),
+      inherit.aes = FALSE,
+      size = 4,
+      lineheight = 0.9,
+      color = "black"
+    ) +
+    labs(
+      x = "log10 PI intensity (au)",
+      y = "log10 GFP intensity (au)"
+    ) +
+    guides(
+      fill = guide_colorbar(
+        barwidth  = unit(0.15, "in"),
+        barheight = unit(1.8, "in"),
+        title.position = "top"
+      )
+    ) +
+    theme_pubr() +
+    scale_x_continuous(limits = c(-0.5, 3.75), breaks = c(0, 1, 2, 3)) +
+    scale_y_continuous(limits = c(-0.5, 3.75), breaks = c(0, 1, 2, 3)) +
+    theme(
+      strip.placement = "outside",
+      strip.background = element_blank(),
+      strip.text.y.left = element_text(angle = 0, size = 14, margin = margin(1, 2, 1, 2, "pt")),
+      strip.text.x = element_text(size = 14, margin = margin(2, 2, 2, 2, "pt")),
+      aspect.ratio = 1,
+      panel.grid = element_line(size = 0.2),
+      panel.border = element_rect(colour = "black", fill = NA, linewidth = 2),
+      panel.spacing.x = unit(0.06, "in"),
+      panel.spacing.y = unit(0.08, "in"),
+      axis.text = element_text(size = 14),
+      axis.title = element_text(size = 14, margin = margin(2, 2, 2, 2, "pt")),
+      axis.ticks = element_blank(),
+      axis.line = element_blank(),
+      legend.position = "right",
+      legend.margin = margin(0, 0, 0, 0, "pt"),
+      legend.box.margin = margin(0, 0, 0, 0, "pt"),
+      legend.key.height = unit(0.15, "in"),
+      legend.key.width  = unit(0.15, "in"),
+      legend.title = element_text(size = 14),
+      legend.text  = element_text(size = 14),
+      plot.margin = margin(4, 6, 4, 6, "mm")
+    ) +
+    # IMPORTANT: keep empty panels for missing (e.g., Control at 2,4,6,8,20)
+    facet_grid(Abx.con ~ timestep, switch = "y", drop = FALSE) +
+    theme(panel.spacing = grid::unit(0.15, "in"))
+
+  # Compute rows/cols from factor levels (Control is last by construction)
+  
+  n_cols <- length(levels(ASCTrep.df$timestep))
+  n_rows <- length(levels(ASCTrep.df$Abx.con))
+  facet_width  <- 2.5
+  facet_height <- 2.5
+
+  ggsave(
+    filename = file.path(
+      info.wd, "Experimental-Results",
+      paste0(info.expID, "_FACS_gating_", strategy, "_20250815_Fig1_Manuscript.pdf")
+    ),
+    plot = p,
+    width  = n_cols * facet_width,
+    height = n_rows * facet_height,
+    units = "in",
+    device = "pdf"
+  )
+}
+
+```
+
+
+```{r}
+rm(thrs,
+   thresholds_list,
+   pos_map,
+   PI_control,
+   p,
+   FACS,
+   df_long_all,
+ 
+   GFP_control,
+   ASCTrep.filtered)
+```
+
