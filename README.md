@@ -33,7 +33,7 @@ analyses described in the demonstration pipeline.
 
 - `1_SciCore` – Code used for image and data analysis within the high-performance computing (HPC) environment on the SciCore cluster..  
 - `2_DataAnalysis` – Scripts used for well-based data analysis within the HPC cluster.  
-- `3_ASCT_Figgures` – Code used to generate the figures presented in the study.
+- `3_ASCT_Figures` – Code used to generate the figures presented in the study.
 - `Nature_microbiology_DemoPipeline` – A demonstration pipeline showing the full workflow on a reduced dataset.
 
 # Notes
